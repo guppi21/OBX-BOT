@@ -142,7 +142,8 @@ async def test_single_message_task_announcement_and_smart_notifications(db_sessi
         assert ok_edit is True
         assert mock_ch.send.call_count == 1  # No new sends
         mock_msg.edit.assert_called_once()
-        assert mock_msg.edit.call_args[1].get("content") is None
+        am = mock_msg.edit.call_args[1].get("allowed_mentions")
+        assert am is not None and not am.roles and not am.everyone
 
 
 def test_auction_announcement_gtd_and_fcfs_cards():

@@ -691,8 +691,14 @@ async def announce_task(
         if pub_rec and pub_rec.channel_id == str(channel.id):
             try:
                 msg = await channel.fetch_message(int(pub_rec.message_id))
-                # Never re-ping on in-place update/edit/refresh
-                await msg.edit(content=None, embed=embed, view=view)
+                # Never re-ping on in-place update/edit/refresh, but preserve raider role mention text
+                preserved_content = msg.content if (isinstance(getattr(msg, "content", None), str) and msg.content.strip()) else initial_content
+                await msg.edit(
+                    content=preserved_content,
+                    embed=embed,
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
                 logger.info(
                     "Updated existing task announcement in %s (Msg ID: %s, Task ID: %s)",
                     channel.name, msg.id, db_task.id,
@@ -731,6 +737,30 @@ async def announce_task(
 
 
 
+class AdminLogDismissView(discord.ui.View):
+    """Interactive view providing a Dismiss button to delete operational logs."""
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @discord.ui.button(label="Dismiss", style=discord.ButtonStyle.secondary, emoji="🗑️", custom_id="obx:admin:dismiss_log")
+    async def dismiss_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        from apps.obx_tasks.bot.permissions import is_admin
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+            return
+        try:
+            if not interaction.response.is_done():
+                await interaction.response.defer()
+            if interaction.message:
+                await interaction.message.delete()
+        except Exception:
+            try:
+                if interaction.message:
+                    await interaction.message.delete()
+            except Exception:
+                pass
+
+
 async def send_admin_log_event(
     guild: discord.Guild,
     title: str,
@@ -757,7 +787,8 @@ async def send_admin_log_event(
                     embed.add_field(name=name, value=value, inline=inline)
             embed.set_footer(text="OBX Administrative Audit Log • Private Operations")
 
-            await channel.send(embed=embed)
+            view = AdminLogDismissView()
+            await channel.send(embed=embed, view=view)
     except Exception as exc:
         logger.warning("Could not send private admin log: %s", exc)
 
@@ -824,8 +855,14 @@ async def announce_auction(auction: Auction, guild: discord.Guild, bot: discord.
         if pub_rec and pub_rec.channel_id == str(channel.id):
             try:
                 msg = await channel.fetch_message(int(pub_rec.message_id))
-                # Never re-ping on in-place update/edit/refresh
-                await msg.edit(content=None, embed=embed, view=view)
+                # Never re-ping on in-place update/edit/refresh, but preserve raider role mention text
+                preserved_content = msg.content if (isinstance(getattr(msg, "content", None), str) and msg.content.strip()) else initial_content
+                await msg.edit(
+                    content=preserved_content,
+                    embed=embed,
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
                 logger.info("Updated existing auction card in %s (Msg ID: %s, Auc ID: %s)", channel.name, msg.id, db_auc.id)
                 return True, f"✅ Auction card updated in {channel.mention}."
             except Exception as exc:
@@ -953,7 +990,13 @@ async def announce_auction_winners(
         if pub_rec and pub_rec.channel_id == str(channel.id):
             try:
                 msg = await channel.fetch_message(int(pub_rec.message_id))
-                await msg.edit(content=None, embed=embed, view=view)
+                preserved_content = msg.content if (isinstance(getattr(msg, "content", None), str) and msg.content.strip()) else initial_content
+                await msg.edit(
+                    content=preserved_content,
+                    embed=embed,
+                    view=view,
+                    allowed_mentions=discord.AllowedMentions.none(),
+                )
                 return True, f"✅ Winner announcement updated in {channel.mention}."
             except Exception as exc:
                 logger.warning("Could not edit previous winner announcement (%s), posting new: %s", pub_rec.message_id, exc)

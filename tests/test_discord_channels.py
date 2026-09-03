@@ -372,7 +372,8 @@ async def test_announce_task_publishes_rich_card_with_social_link_unfurl_and_out
         assert "updated in" in msg2
         assert mock_ch.send.call_count == 1  # No new sends
         mock_msg.edit.assert_called_once()
-        assert mock_msg.edit.call_args[1].get("content") is None
+        am = mock_msg.edit.call_args[1].get("allowed_mentions")
+        assert am is not None and not am.roles and not am.everyone
 
 
 @pytest.mark.asyncio

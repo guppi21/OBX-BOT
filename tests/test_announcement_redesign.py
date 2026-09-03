@@ -146,7 +146,8 @@ async def test_announce_task_everyone_ping_on_create_only(db_session):
         ok2, msg2 = await announce_task(task, mock_guild, mock_bot)
         assert ok2 is True
         mock_msg.edit.assert_called_once()
-        assert mock_msg.edit.call_args[1].get("content") is None
+        am = mock_msg.edit.call_args[1].get("allowed_mentions")
+        assert am is not None and not am.roles and not am.everyone
 
 
 @pytest.mark.asyncio
@@ -197,10 +198,11 @@ async def test_announce_auction_and_winners_everyone_ping(db_session):
         assert "NEW OBX AUCTION IS LIVE" not in mock_ch_auc.send.call_args[1]["content"]
         assert "A new whitelist opportunity is now available" not in mock_ch_auc.send.call_args[1]["content"]
 
-        # 2. In-place auction update: no ping
+        # 2. In-place auction update: no ping (suppressed via allowed_mentions)
         ok_a2, _ = await announce_auction(auc, mock_guild, mock_bot)
         assert ok_a2 is True
-        assert mock_msg_auc.edit.call_args[1].get("content") is None
+        am_a = mock_msg_auc.edit.call_args[1].get("allowed_mentions")
+        assert am_a is not None and not am_a.roles and not am_a.everyone
 
         # 3. Winner announcement: pings strictly RAID_ROLE_ID (zero @everyone, zero generic text)
         winner_mock = MagicMock(spec=AuctionBid, discord_user_id="user_w1", bid_amount=250)
@@ -211,10 +213,11 @@ async def test_announce_auction_and_winners_everyone_ping(db_session):
         assert "OBX RESULTS ARE IN" not in mock_ch_win.send.call_args[1]["content"]
         assert "The winners have been confirmed" not in mock_ch_win.send.call_args[1]["content"]
 
-        # 4. Winner update in place: no ping
+        # 4. Winner update in place: no ping (suppressed via allowed_mentions)
         ok_w2, _ = await announce_auction_winners(auc, [winner_mock], 1, mock_guild, mock_bot)
         assert ok_w2 is True
-        assert mock_msg_win.edit.call_args[1].get("content") is None
+        am_w = mock_msg_win.edit.call_args[1].get("allowed_mentions")
+        assert am_w is not None and not am_w.roles and not am_w.everyone
 
 
 def test_admin_create_task_type_select_view():

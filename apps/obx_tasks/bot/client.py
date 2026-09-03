@@ -26,7 +26,7 @@ from apps.obx_tasks.bot.dashboard_views import (
 from apps.obx_tasks.bot.leaderboard_views import LeaderboardView
 from apps.obx_tasks.bot.auction_views import AuctionCenterView, AdminCreateAuctionSelectView
 from apps.obx_tasks.bot.channel_views import ChannelConfigView, AuctionWinnerResultView, handle_channel_config
-from apps.obx_tasks.bot.announcement_service import refresh_all_public_systems, announce_auction_winners
+from apps.obx_tasks.bot.announcement_service import refresh_all_public_systems, announce_auction_winners, AdminLogDismissView
 
 logger = get_logger("obx.tasks.bot")
 
@@ -43,6 +43,7 @@ class OBXTaskBot(commands.Bot):
         self.add_view(LeaderboardView())
         self.add_view(AuctionCenterView())
         self.add_view(AuctionWinnerResultView())
+        self.add_view(AdminLogDismissView())
 
         # Start background maintenance loop for auctions & tasks
         self.loop.create_task(self._auction_maintenance_loop())
@@ -162,6 +163,22 @@ class OBXTaskBot(commands.Bot):
                         pass
                     except Exception as del_err:
                         logger.warning("Could not delete celebration message: %s", del_err)
+                return
+            # Admin log dismissal
+            elif custom_id == "obx:admin:dismiss_log":
+                from apps.obx_tasks.bot.permissions import is_admin
+                if not is_admin(interaction):
+                    await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+                    return
+                try:
+                    if not interaction.response.is_done():
+                        await interaction.response.defer()
+                    if interaction.message:
+                        await interaction.message.delete()
+                except discord.NotFound:
+                    pass
+                except Exception as del_err:
+                    logger.warning("Could not delete admin log message: %s", del_err)
                 return
             # Help & Channel Info interactions
             elif custom_id == "obx:help:tasks":

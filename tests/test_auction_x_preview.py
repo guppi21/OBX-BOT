@@ -382,7 +382,9 @@ async def test_auction_updates_do_not_reping_raid_role_id_and_no_duplicates(db_s
         assert ok2 is True
         # Must NOT send a new message
         assert mock_ch.send.call_count == 1
-        # Must edit existing message with content=None (suppress re-ping)
+        # Must edit existing message with allowed_mentions suppressing re-ping
         mock_msg.edit.assert_called_once()
         edit_kwargs = mock_msg.edit.call_args[1]
-        assert edit_kwargs["content"] is None
+        assert edit_kwargs.get("allowed_mentions") is not None
+        assert not edit_kwargs["allowed_mentions"].roles
+        assert not edit_kwargs["allowed_mentions"].everyone
