@@ -5,7 +5,7 @@ import traceback
 from datetime import datetime, timezone, timedelta
 import discord
 from discord.ui import Modal, TextInput, View, Button, Select
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from sqlalchemy import text, desc
 
 from packages.shared.config import get_settings

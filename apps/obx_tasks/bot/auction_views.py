@@ -2,7 +2,7 @@ import inspect
 import uuid
 import discord
 from discord.ui import View, Button, Modal, TextInput, Select
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 from packages.database.session import session_scope
 from packages.database.models.auction import Auction, AuctionBid, AuctionClaim
