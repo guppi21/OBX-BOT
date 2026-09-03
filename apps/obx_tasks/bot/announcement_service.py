@@ -365,8 +365,18 @@ def build_task_announcement_embed(task) -> discord.Embed:
 
 
 
-def check_channel_permissions(channel: discord.TextChannel, me: discord.Member) -> Tuple[bool, List[str]]:
+def check_channel_permissions(channel: Any, me: discord.Member) -> Tuple[bool, List[str]]:
     """Check required bot permissions in a target Discord channel."""
+    if not hasattr(channel, "permissions_for"):
+        if hasattr(channel, "guild") and channel.guild:
+            full_ch = channel.guild.get_channel(channel.id)
+            if full_ch and hasattr(full_ch, "permissions_for"):
+                channel = full_ch
+            else:
+                return (True, [])
+        else:
+            return (True, [])
+
     perms = channel.permissions_for(me)
     missing = []
     if not perms.view_channel:

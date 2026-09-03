@@ -74,6 +74,10 @@ class FeatureChannelSelect(ChannelSelect):
 
         await interaction.response.defer(ephemeral=True)
         selected_ch = self.values[0]
+        if interaction.guild:
+            resolved_ch = interaction.guild.get_channel(selected_ch.id)
+            if resolved_ch:
+                selected_ch = resolved_ch
 
         from apps.obx_tasks.bot.announcement_service import (
             check_channel_permissions, deploy_or_update_task_center, deploy_or_update_leaderboard,
