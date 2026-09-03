@@ -1,0 +1,1 @@
+"""OBX Social Tasks Application."""
