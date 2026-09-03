@@ -566,6 +566,15 @@ class OBXTaskBot(commands.Bot):
             except Exception as nick_err:
                 logger.debug("Could not auto-set nickname in guild '%s': %s", g.name, nick_err)
 
+        # Auto-sync slash commands directly to all connected guilds for instant availability
+        for g in self.guilds:
+            try:
+                self.tree.copy_global_to(guild=g)
+                synced_g = await self.tree.sync(guild=g)
+                logger.info("Synchronized %d slash commands to guild '%s' (ID: %s)", len(synced_g), g.name, g.id)
+            except Exception as sync_err:
+                logger.debug("Could not direct-sync commands to guild '%s': %s", g.name, sync_err)
+
         # Auto-deploy / refresh public systems across configured channels
         for g in self.guilds:
             try:
@@ -579,13 +588,20 @@ class OBXTaskBot(commands.Bot):
     async def on_guild_join(self, guild: discord.Guild):
         settings = get_settings()
         logger.info("Bot joined new guild: '%s' (ID: %s)", guild.name, guild.id)
-        if settings.DISCORD_GUILD_ID and str(guild.id) == str(settings.DISCORD_GUILD_ID):
-            try:
-                self.tree.copy_global_to(guild=guild)
-                synced = await self.tree.sync(guild=guild)
-                logger.info("Automatically synchronized %d slash commands to test guild '%s' on join!", len(synced), guild.name)
-            except Exception as exc:
-                logger.error("Error synchronizing slash commands on guild join: %s", exc)
+        try:
+            me = guild.me or await guild.fetch_member(self.user.id)
+            if me and me.nick != "💎 OBX BOT":
+                await me.edit(nick="💎 OBX BOT")
+                logger.info("Set bot nickname to '💎 OBX BOT' in '%s'", guild.name)
+        except Exception as nick_err:
+            logger.debug("Could not set nickname in '%s' on join: %s", guild.name, nick_err)
+
+        try:
+            self.tree.copy_global_to(guild=guild)
+            synced = await self.tree.sync(guild=guild)
+            logger.info("Automatically synchronized %d slash commands to guild '%s' on join!", len(synced), guild.name)
+        except Exception as exc:
+            logger.error("Error synchronizing slash commands on guild join for '%s': %s", guild.name, exc)
 
     async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         logger.error("Discord interaction failure on command '%s': %s", interaction.command.name if interaction.command else "unknown", error)
