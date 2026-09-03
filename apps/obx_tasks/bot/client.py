@@ -556,6 +556,16 @@ class OBXTaskBot(commands.Bot):
                     settings.DISCORD_GUILD_ID,
                 )
 
+        # Auto-ensure bot nickname in all joined servers is '💎 OBX BOT'
+        for g in self.guilds:
+            try:
+                me = g.me or await g.fetch_member(self.user.id)
+                if me and me.nick != "💎 OBX BOT":
+                    await me.edit(nick="💎 OBX BOT")
+                    logger.info("Auto-set bot nickname to '💎 OBX BOT' in guild '%s' (%s)", g.name, g.id)
+            except Exception as nick_err:
+                logger.debug("Could not auto-set nickname in guild '%s': %s", g.name, nick_err)
+
         # Auto-deploy / refresh public systems across configured channels
         for g in self.guilds:
             try:
@@ -927,6 +937,30 @@ def create_discord_bot() -> OBXTaskBot:
     async def admin_members_command(interaction: discord.Interaction):
         from apps.obx_tasks.bot.admin_members_views import handle_admin_members
         await handle_admin_members(interaction)
+
+    @bot.tree.command(name="admin-set-bot-name", description="[Admin] Set or refresh the bot's display nickname in this server")
+    @app_commands.describe(name="The new display nickname (default: 💎 OBX BOT)")
+    async def admin_set_bot_name_command(interaction: discord.Interaction, name: Optional[str] = "💎 OBX BOT"):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: You do not have the required administrator role.", ephemeral=True)
+            return
+
+        if not interaction.guild:
+            await interaction.response.send_message("❌ Must be executed inside a server.", ephemeral=True)
+            return
+
+        target_name = name or "💎 OBX BOT"
+        try:
+            me = interaction.guild.me or await interaction.guild.fetch_member(bot.user.id)
+            await me.edit(nick=target_name)
+            await interaction.response.send_message(f"✅ Bot nickname updated to **{target_name}** in this server!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ Bot is missing the **Change Nickname** permission in this server. Please ensure the bot's role has 'Change Nickname'.",
+                ephemeral=True,
+            )
+        except Exception as exc:
+            await interaction.response.send_message(f"❌ Could not update nickname: {exc}", ephemeral=True)
 
     @bot.tree.command(name="admin-configure-channels", description="[Admin] Open interactive channel routing dashboard")
     async def admin_configure_channels_command(interaction: discord.Interaction):
