@@ -1,5 +1,5 @@
 [phases.install]
-cmds = ["pip install -r requirements.txt"]
+cmds = ["python -m pip install --upgrade pip && python -m pip install -r requirements.txt"]
 
 [start]
 cmd = "python apps/obx_tasks/bot/main.py --mode live --port $PORT"
