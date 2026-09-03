@@ -37,12 +37,40 @@ class ChannelService:
 
         guild_id_str = str(guild_id).strip()
         config = self.session.query(GuildConfig).filter_by(guild_id=guild_id_str).first()
+        changed = False
         if not config:
             config = GuildConfig(guild_id=guild_id_str)
             self.session.add(config)
+            changed = True
+
+        from packages.shared.config import get_settings
+        settings = get_settings()
+        is_target_guild = (settings.DISCORD_GUILD_ID is not None and str(guild_id_str) == str(settings.DISCORD_GUILD_ID))
+
+        if is_target_guild:
+            if not config.tasks_channel_id and settings.DISCORD_TASK_CHANNEL_ID:
+                config.tasks_channel_id = str(settings.DISCORD_TASK_CHANNEL_ID)
+                changed = True
+            if not config.auctions_channel_id and settings.DISCORD_AUCTION_CHANNEL_ID:
+                config.auctions_channel_id = str(settings.DISCORD_AUCTION_CHANNEL_ID)
+                changed = True
+            if not config.leaderboard_channel_id and settings.DISCORD_LEADERBOARD_CHANNEL_ID:
+                config.leaderboard_channel_id = str(settings.DISCORD_LEADERBOARD_CHANNEL_ID)
+                changed = True
+            if not config.winners_channel_id and settings.DISCORD_WINNERS_CHANNEL_ID:
+                config.winners_channel_id = str(settings.DISCORD_WINNERS_CHANNEL_ID)
+                changed = True
+            if not config.admin_channel_id and settings.DISCORD_ADMIN_LOG_CHANNEL_ID:
+                config.admin_channel_id = str(settings.DISCORD_ADMIN_LOG_CHANNEL_ID)
+                changed = True
+            if not config.task_alerts_role_id and settings.RAID_ROLE_ID:
+                config.task_alerts_role_id = str(settings.RAID_ROLE_ID)
+                changed = True
+
+        if changed:
             self.session.commit()
             self.session.refresh(config)
-            logger.info("Initialized GuildConfig for guild: %s", guild_id_str)
+            logger.info("Initialized/Synchronized GuildConfig for guild: %s", guild_id_str)
         return config
 
     def update_guild_channel(

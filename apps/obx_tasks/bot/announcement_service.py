@@ -378,19 +378,45 @@ def check_channel_permissions(channel: discord.TextChannel, me: discord.Member) 
     return (len(missing) == 0, missing)
 
 
+def resolve_channel_for_feature(
+    guild: discord.Guild,
+    explicit_id: Optional[str] = None,
+    name_keywords: Optional[List[str]] = None,
+) -> Optional[discord.TextChannel]:
+    """Resolve target TextChannel by explicit ID, or auto-discover by channel name keyword."""
+    if explicit_id:
+        try:
+            ch = guild.get_channel(int(explicit_id))
+            if ch and isinstance(ch, discord.TextChannel):
+                return ch
+        except (ValueError, TypeError):
+            pass
+
+    if name_keywords and hasattr(guild, "text_channels"):
+        for ch in guild.text_channels:
+            name_lower = ch.name.lower()
+            if any(kw.lower() in name_lower for kw in name_keywords):
+                return ch
+    return None
+
+
 async def deploy_or_update_task_center(guild: discord.Guild, bot: discord.Client) -> Tuple[bool, str]:
     """Deploy or update persistent Task Center dashboard in the configured channel."""
     with session_scope() as session:
         service = ChannelService(session)
         config = service.get_or_create_guild_config(str(guild.id))
-        channel_id = config.tasks_channel_id
+        channel = resolve_channel_for_feature(
+            guild,
+            explicit_id=config.tasks_channel_id or get_settings().DISCORD_TASK_CHANNEL_ID,
+            name_keywords=["tasks", "missions", "task", "mission"],
+        )
 
-        if not channel_id:
+        if not channel:
             return False, "Tasks channel is not configured. Use Admin Hub -> Configure Channels."
 
-        channel = guild.get_channel(int(channel_id))
-        if not channel or not isinstance(channel, discord.TextChannel):
-            return False, f"Configured Tasks channel `{channel_id}` was not found in this server."
+        if not config.tasks_channel_id:
+            config.tasks_channel_id = str(channel.id)
+            session.commit()
 
         me = guild.me or guild.get_member(bot.user.id)
         if me:
@@ -444,14 +470,18 @@ async def deploy_or_update_leaderboard(guild: discord.Guild, bot: discord.Client
     with session_scope() as session:
         ch_service = ChannelService(session)
         config = ch_service.get_or_create_guild_config(str(guild.id))
-        channel_id = config.leaderboard_channel_id
+        channel = resolve_channel_for_feature(
+            guild,
+            explicit_id=config.leaderboard_channel_id or get_settings().DISCORD_LEADERBOARD_CHANNEL_ID,
+            name_keywords=["leaderboard", "top-raiders", "ranks"],
+        )
 
-        if not channel_id:
+        if not channel:
             return False, "Leaderboard channel is not configured. Use Admin Hub -> Configure Channels."
 
-        channel = guild.get_channel(int(channel_id))
-        if not channel or not isinstance(channel, discord.TextChannel):
-            return False, f"Configured Leaderboard channel `{channel_id}` was not found in this server."
+        if not config.leaderboard_channel_id:
+            config.leaderboard_channel_id = str(channel.id)
+            session.commit()
 
         me = guild.me or guild.get_member(bot.user.id)
         if me:
@@ -516,15 +546,19 @@ async def announce_task(
     with session_scope() as session:
         ch_service = ChannelService(session)
         config = ch_service.get_or_create_guild_config(str(guild.id))
-        channel_id = config.tasks_channel_id
+        channel = resolve_channel_for_feature(
+            guild,
+            explicit_id=config.tasks_channel_id or get_settings().DISCORD_TASK_CHANNEL_ID,
+            name_keywords=["tasks", "missions", "task", "mission"],
+        )
 
-        if not channel_id:
+        if not channel:
             logger.info("Tasks channel not configured for guild %s; skipping task announcement.", guild.id)
             return False, "Tasks channel is not configured."
 
-        channel = guild.get_channel(int(channel_id))
-        if not channel or not isinstance(channel, discord.TextChannel):
-            return False, f"Configured Tasks channel `{channel_id}` was not found."
+        if not config.tasks_channel_id:
+            config.tasks_channel_id = str(channel.id)
+            session.commit()
 
         me = guild.me or guild.get_member(bot.user.id)
         if me:
@@ -711,15 +745,19 @@ async def announce_auction(auction: Auction, guild: discord.Guild, bot: discord.
     with session_scope() as session:
         ch_service = ChannelService(session)
         config = ch_service.get_or_create_guild_config(str(guild.id))
-        channel_id = config.auctions_channel_id
+        channel = resolve_channel_for_feature(
+            guild,
+            explicit_id=config.auctions_channel_id or get_settings().DISCORD_AUCTION_CHANNEL_ID,
+            name_keywords=["auctions", "auction", "whitelist"],
+        )
 
-        if not channel_id:
+        if not channel:
             logger.info("Auctions channel not configured for guild %s; skipping auto-announcement.", guild.id)
             return False, "Auctions channel is not configured."
 
-        channel = guild.get_channel(int(channel_id))
-        if not channel or not isinstance(channel, discord.TextChannel):
-            return False, f"Configured Auctions channel `{channel_id}` was not found."
+        if not config.auctions_channel_id:
+            config.auctions_channel_id = str(channel.id)
+            session.commit()
 
         me = guild.me or guild.get_member(bot.user.id)
         if me:
@@ -807,15 +845,19 @@ async def announce_auction_winners(
     with session_scope() as session:
         ch_service = ChannelService(session)
         config = ch_service.get_or_create_guild_config(str(guild.id))
-        channel_id = config.winners_channel_id or config.auctions_channel_id
+        channel = resolve_channel_for_feature(
+            guild,
+            explicit_id=config.winners_channel_id or get_settings().DISCORD_WINNERS_CHANNEL_ID or config.auctions_channel_id or get_settings().DISCORD_AUCTION_CHANNEL_ID,
+            name_keywords=["winners", "winner", "auctions", "auction"],
+        )
 
-        if not channel_id:
+        if not channel:
             logger.info("Neither Winners nor Auctions channel configured for guild %s; skipping public winner announcement.", guild.id)
             return False, "Winners channel not configured."
 
-        channel = guild.get_channel(int(channel_id))
-        if not channel or not isinstance(channel, discord.TextChannel):
-            return False, f"Configured channel `{channel_id}` was not found."
+        if not config.winners_channel_id:
+            config.winners_channel_id = str(channel.id)
+            session.commit()
 
         me = guild.me or guild.get_member(bot.user.id)
         if me:
@@ -989,14 +1031,18 @@ async def deploy_or_update_auction_center(guild: discord.Guild, bot: discord.Cli
     with session_scope() as session:
         ch_service = ChannelService(session)
         config = ch_service.get_or_create_guild_config(str(guild.id))
-        channel_id = config.auctions_channel_id
+        channel = resolve_channel_for_feature(
+            guild,
+            explicit_id=config.auctions_channel_id or get_settings().DISCORD_AUCTION_CHANNEL_ID,
+            name_keywords=["auctions", "auction", "whitelist"],
+        )
 
-        if not channel_id:
+        if not channel:
             return False, "Auctions channel is not configured. Use Admin Hub -> Configure Channels."
 
-        channel = guild.get_channel(int(channel_id))
-        if not channel or not isinstance(channel, discord.TextChannel):
-            return False, f"Configured Auctions channel `{channel_id}` was not found in this server."
+        if not config.auctions_channel_id:
+            config.auctions_channel_id = str(channel.id)
+            session.commit()
 
         me = guild.me or guild.get_member(bot.user.id)
         if me:
@@ -1049,14 +1095,18 @@ async def deploy_or_update_admin_hub(guild: discord.Guild, bot: discord.Client) 
     with session_scope() as session:
         ch_service = ChannelService(session)
         config = ch_service.get_or_create_guild_config(str(guild.id))
-        channel_id = config.admin_channel_id
+        channel = resolve_channel_for_feature(
+            guild,
+            explicit_id=config.admin_channel_id or get_settings().DISCORD_ADMIN_LOG_CHANNEL_ID,
+            name_keywords=["admin-logs", "admin-log", "admin_logs", "admin_log", "admin-hub", "admin"],
+        )
 
-        if not channel_id:
+        if not channel:
             return False, "Admin channel is not configured. Use Admin Hub -> Configure Channels."
 
-        channel = guild.get_channel(int(channel_id))
-        if not channel or not isinstance(channel, discord.TextChannel):
-            return False, f"Configured Admin channel `{channel_id}` was not found in this server."
+        if not config.admin_channel_id:
+            config.admin_channel_id = str(channel.id)
+            session.commit()
 
         me = guild.me or guild.get_member(bot.user.id)
         if me:
@@ -1118,14 +1168,18 @@ async def deploy_or_update_winners_center(guild: discord.Guild, bot: discord.Cli
     with session_scope() as session:
         ch_service = ChannelService(session)
         config = ch_service.get_or_create_guild_config(str(guild.id))
-        channel_id = config.winners_channel_id or config.auctions_channel_id
+        channel = resolve_channel_for_feature(
+            guild,
+            explicit_id=config.winners_channel_id or get_settings().DISCORD_WINNERS_CHANNEL_ID or config.auctions_channel_id or get_settings().DISCORD_AUCTION_CHANNEL_ID,
+            name_keywords=["winners", "winner", "auctions", "auction"],
+        )
 
-        if not channel_id:
+        if not channel:
             return False, "Winners channel is not configured. Use Admin Hub -> Configure Channels."
 
-        channel = guild.get_channel(int(channel_id))
-        if not channel or not isinstance(channel, discord.TextChannel):
-            return False, f"Configured Winners channel `{channel_id}` was not found in this server."
+        if not config.winners_channel_id:
+            config.winners_channel_id = str(channel.id)
+            session.commit()
 
         me = guild.me or guild.get_member(bot.user.id)
         if me:
