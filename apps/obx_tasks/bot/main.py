@@ -55,8 +55,13 @@ def main():
     for attempt in range(1, 6):
         try:
             with engine.connect() as conn:
-                result = conn.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).scalar_one_or_none()
-                logger.info("Database connection successful (Alembic migration head: %s)", result or "003_task_audit_logs")
+                try:
+                    result = conn.execute(text("SELECT version_num FROM alembic_version LIMIT 1")).scalar_one_or_none()
+                    logger.info("Database connection successful (Alembic migration head: %s)", result or "003_task_audit_logs")
+                except Exception:
+                    from packages.database.base import Base
+                    Base.metadata.create_all(engine)
+                    logger.info("Database connection successful (Initialized schema from metadata)")
                 try:
                     conn.execute(text("ALTER TABLE raider_profiles ADD COLUMN IF NOT EXISTS twitter_avatar_url VARCHAR(1024)"))
                     conn.commit()
