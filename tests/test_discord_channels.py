@@ -181,7 +181,8 @@ async def test_refresh_all_public_systems_includes_auctions_channel(db_session):
     mock_guild.me = MagicMock()
     mock_bot = MagicMock(spec=discord.Client)
 
-    with patch("apps.obx_tasks.bot.announcement_service.session_scope", lambda: mock_session_scope_for(db_session)):
+    with patch("apps.obx_tasks.bot.announcement_service.session_scope", lambda: mock_session_scope_for(db_session)), \
+         patch.object(get_settings(), "ENABLE_STATIC_CHANNEL_BANNERS", True):
         results = await refresh_all_public_systems(mock_guild, mock_bot)
 
     assert "Tasks" in results
@@ -218,7 +219,8 @@ async def test_auction_center_publishes_empty_state_and_updates_existing(db_sess
 
     mock_bot = MagicMock(spec=discord.Client)
 
-    with patch("apps.obx_tasks.bot.announcement_service.session_scope", lambda: mock_session_scope_for(db_session)):
+    with patch("apps.obx_tasks.bot.announcement_service.session_scope", lambda: mock_session_scope_for(db_session)), \
+         patch.object(get_settings(), "ENABLE_STATIC_CHANNEL_BANNERS", True):
         # First deploy: creates new message
         ok1, msg1 = await deploy_or_update_auction_center(mock_guild, mock_bot)
         assert ok1 is True

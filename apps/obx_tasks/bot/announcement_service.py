@@ -435,6 +435,18 @@ async def deploy_or_update_task_center(guild: discord.Guild, bot: discord.Client
                 return False, f"Missing bot permissions in {channel.mention}: {', '.join(missing)}"
 
         pub_rec = service.get_published_message(str(guild.id), feature_type="TASK_DASHBOARD")
+
+        if not get_settings().ENABLE_STATIC_CHANNEL_BANNERS:
+            if pub_rec:
+                try:
+                    msg = await channel.fetch_message(int(pub_rec.message_id))
+                    await msg.delete()
+                    logger.info("Deleted unwanted static Task Center card in #%s", channel.name)
+                except Exception:
+                    pass
+                session.delete(pub_rec)
+                session.commit()
+            return True, f"✅ Tasks channel active in {channel.mention}."
         desc = (
             "Complete community missions.\n"
             "Submit proof.\n"
@@ -1060,6 +1072,20 @@ async def deploy_or_update_auction_center(guild: discord.Guild, bot: discord.Cli
             if not valid:
                 return False, f"Missing bot permissions in {channel.mention}: {', '.join(missing)}"
 
+        pub_rec = ch_service.get_published_message(str(guild.id), feature_type="AUCTION_CENTER")
+
+        if not get_settings().ENABLE_STATIC_CHANNEL_BANNERS:
+            if pub_rec:
+                try:
+                    msg = await channel.fetch_message(int(pub_rec.message_id))
+                    await msg.delete()
+                    logger.info("Deleted unwanted static Auction Center card in #%s", channel.name)
+                except Exception:
+                    pass
+                session.delete(pub_rec)
+                session.commit()
+            return True, f"✅ Auctions channel active in {channel.mention}."
+
         desc = (
             "Bid your OBX.\n"
             "Compete for opportunities.\n"
@@ -1196,6 +1222,20 @@ async def deploy_or_update_winners_center(guild: discord.Guild, bot: discord.Cli
             valid, missing = check_channel_permissions(channel, me)
             if not valid:
                 return False, f"Missing bot permissions in {channel.mention}: {', '.join(missing)}"
+
+        pub_rec = ch_service.get_published_message(str(guild.id), feature_type="WINNERS_CENTER")
+
+        if not get_settings().ENABLE_STATIC_CHANNEL_BANNERS:
+            if pub_rec:
+                try:
+                    msg = await channel.fetch_message(int(pub_rec.message_id))
+                    await msg.delete()
+                    logger.info("Deleted unwanted static Winners Center card in #%s", channel.name)
+                except Exception:
+                    pass
+                session.delete(pub_rec)
+                session.commit()
+            return True, f"✅ Winners channel active in {channel.mention}."
 
         desc = "See confirmed winners and completed results."
         embed = discord.Embed(

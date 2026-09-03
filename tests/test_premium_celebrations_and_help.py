@@ -223,7 +223,8 @@ async def test_persistent_channel_dashboards_deployment(db_session):
     mock_guild.get_channel.side_effect = lambda cid: mock_channels.get(cid)
     mock_bot = MagicMock(spec=discord.Client)
 
-    with patch("apps.obx_tasks.bot.announcement_service.session_scope", lambda: mock_session_scope_for(db_session)):
+    with patch("apps.obx_tasks.bot.announcement_service.session_scope", lambda: mock_session_scope_for(db_session)), \
+         patch.object(get_settings(), "ENABLE_STATIC_CHANNEL_BANNERS", True):
         # 1. Refresh all public systems
         results = await refresh_all_public_systems(mock_guild, mock_bot)
 

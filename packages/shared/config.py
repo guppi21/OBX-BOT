@@ -71,6 +71,10 @@ class Settings(BaseSettings):
         default=None,
         description="Optional channel ID for OBX Admin Logs",
     )
+    ENABLE_STATIC_CHANNEL_BANNERS: bool = Field(
+        default=False,
+        description="Whether to post static info/help header cards to channels (disabled by default)",
+    )
     DISCORD_ADMIN_ROLE_ID: Optional[str] = Field(
         default=None,
         description="Single Discord role ID permitted for admin task commands",
