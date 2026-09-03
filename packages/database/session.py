@@ -9,6 +9,10 @@ from packages.shared.config import get_settings
 def create_db_engine(database_url: str | None = None) -> Engine:
     settings = get_settings()
     url = database_url or settings.DATABASE_URL
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql+psycopg2://", 1)
+    elif url.startswith("postgresql://") and not url.startswith("postgresql+"):
+        url = url.replace("postgresql://", "postgresql+psycopg2://", 1)
     
     connect_args = {}
     if url.startswith("sqlite"):

@@ -142,6 +142,16 @@ class Settings(BaseSettings):
     def validate_channel_ids(cls, v: Optional[str], info) -> Optional[str]:
         return _validate_snowflake_id(info.field_name, v)
 
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, v: str) -> str:
+        if isinstance(v, str):
+            if v.startswith("postgres://"):
+                return v.replace("postgres://", "postgresql+psycopg2://", 1)
+            elif v.startswith("postgresql://") and not v.startswith("postgresql+"):
+                return v.replace("postgresql://", "postgresql+psycopg2://", 1)
+        return v
+
     @field_validator("DISCORD_ADMIN_ROLE_ID", "RAID_ROLE_ID", "DISCORD_TASK_ALERTS_ROLE_ID", mode="before")
     @classmethod
     def validate_role_ids(cls, v: Optional[str], info) -> Optional[str]:
