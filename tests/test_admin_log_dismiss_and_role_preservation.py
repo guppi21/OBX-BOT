@@ -169,3 +169,41 @@ async def test_task_edit_preserves_raider_role_tag_and_suppresses_reping(db_sess
     # AllowedMentions is none so no re-ping occurs
     assert edit_kw["allowed_mentions"].roles is False
     assert edit_kw["allowed_mentions"].everyone is False
+
+
+def test_new_server_raid_role_resolution_by_id_and_name():
+    from apps.obx_tasks.bot.announcement_service import resolve_raider_role
+    from apps.obx_tasks.bot.permissions import has_raider_role
+
+    # 1. Guild where role has ID 1539356123553996913
+    mock_guild1 = MagicMock(spec=discord.Guild)
+    mock_role1 = MagicMock(spec=discord.Role, id=1539356123553996913)
+    mock_role1.name = "raid"
+    mock_guild1.get_role.side_effect = lambda rid: mock_role1 if rid == 1539356123553996913 else None
+
+    rid1, role1 = resolve_raider_role(mock_guild1)
+    assert rid1 == "1539356123553996913"
+    assert role1 == mock_role1
+
+    # 2. Guild where role is named "raid"
+    mock_guild2 = MagicMock(spec=discord.Guild)
+    mock_role2 = MagicMock(spec=discord.Role, id=777888999)
+    mock_role2.name = "raid"
+    mock_guild2.get_role.return_value = None
+    mock_guild2.roles = [mock_role2]
+
+    rid2, role2 = resolve_raider_role(mock_guild2)
+    assert rid2 == "777888999"
+    assert role2 == mock_role2
+
+    # 3. Member with raid role ID 1539356123553996913
+    mock_member1 = MagicMock(spec=discord.Member)
+    mock_member1.roles = [mock_role1]
+    mock_member1.guild_permissions.administrator = False
+    assert has_raider_role(mock_member1) is True
+
+    # 4. Member with role named "raid"
+    mock_member2 = MagicMock(spec=discord.Member)
+    mock_member2.roles = [mock_role2]
+    mock_member2.guild_permissions.administrator = False
+    assert has_raider_role(mock_member2) is True

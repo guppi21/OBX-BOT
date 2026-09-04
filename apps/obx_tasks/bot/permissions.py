@@ -35,16 +35,21 @@ def has_raider_role(interaction_or_member: discord.Interaction | discord.Member)
         return True
 
     settings = get_settings()
-    raid_role_id = settings.RAID_ROLE_ID
+    configured_ids = {
+        str(settings.RAID_ROLE_ID) if settings.RAID_ROLE_ID else None,
+        "1539356123553996913",
+        "1544870040866787428",
+    }
+    configured_ids.discard(None)
 
     if isinstance(member, discord.Member):
-        if raid_role_id:
-            user_role_ids = {str(role.id) for role in member.roles}
-            if str(raid_role_id) in user_role_ids:
-                return True
+        user_role_ids = {str(role.id) for role in member.roles}
+        if user_role_ids.intersection(configured_ids):
+            return True
         # Also support matching by role name
         for r in member.roles:
-            if r.name in ("⚡ OBX Raider", "OBX Raider"):
+            r_name = r.name.lower().strip()
+            if r_name in ("raid", "raids", "raider", "raiders", "obx raider", "⚡ obx raider") or "raid" in r_name or "raider" in r_name:
                 return True
 
     return False

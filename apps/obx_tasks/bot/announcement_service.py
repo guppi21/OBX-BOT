@@ -29,22 +29,38 @@ logger = get_logger("obx.tasks.bot.announcements")
 
 
 def resolve_raider_role(guild: Optional[discord.Guild]) -> Tuple[Optional[str], Optional[discord.Role]]:
-    """Resolve the universal OBX Raider role ID and Role object for announcements.
-    Checks settings.RAID_ROLE_ID first, then falls back to searching guild roles.
+    """Resolve the universal OBX Raider or Raid role ID and Role object for announcements.
+    Checks settings.RAID_ROLE_ID first, then checks known IDs and falls back to searching guild roles.
     """
+    settings = get_settings()
+    raid_role_id = settings.RAID_ROLE_ID
     raid_role = None
-    raid_role_id = get_settings().RAID_ROLE_ID
+
     if guild and raid_role_id:
         try:
             raid_role = guild.get_role(int(raid_role_id))
         except (ValueError, TypeError):
             pass
+
+    # If role not found in this guild, check new server role ID: 1539356123553996913
     if guild and not raid_role:
-        for r in guild.roles:
-            if "raider" in r.name.lower():
+        try:
+            r = guild.get_role(1539356123553996913)
+            if r:
+                raid_role = r
+                raid_role_id = str(r.id)
+        except (ValueError, TypeError):
+            pass
+
+    # Fallback to searching guild roles by name
+    if guild and not raid_role:
+        for r in getattr(guild, "roles", []):
+            r_name = getattr(r, "name", "").lower().strip()
+            if r_name in ("raid", "raids", "raider", "raiders", "obx raider", "⚡ obx raider") or "raid" in r_name or "raider" in r_name:
                 raid_role = r
                 raid_role_id = str(r.id)
                 break
+
     return raid_role_id, raid_role
 
 # Task type → (headline, emoji, action_verb)

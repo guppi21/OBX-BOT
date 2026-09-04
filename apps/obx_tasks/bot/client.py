@@ -523,19 +523,12 @@ class OBXTaskBot(commands.Bot):
                                 guild.name,
                             )
 
-                if settings.RAID_ROLE_ID:
-                    raid_role = guild.get_role(int(settings.RAID_ROLE_ID))
-                    if raid_role:
-                        logger.info("Universal ⚡ OBX Raider role verified in guild: '%s' (ID: %s)", raid_role.name, raid_role.id)
-                    else:
-                        logger.warning(
-                            "Configured RAID_ROLE_ID '%s' NOT FOUND in guild '%s'. "
-                            "Please verify RAID_ROLE_ID in .env or create the role.",
-                            settings.RAID_ROLE_ID,
-                            guild.name,
-                        )
+                from apps.obx_tasks.bot.announcement_service import resolve_raider_role
+                rid, raid_role = resolve_raider_role(guild)
+                if raid_role:
+                    logger.info("Raid role verified in guild '%s': '%s' (ID: %s)", guild.name, raid_role.name, raid_role.id)
                 else:
-                    logger.warning("No RAID_ROLE_ID configured in .env! Universal raid role access gating is unconfigured.")
+                    logger.warning("No raid role found in guild '%s'.", guild.name)
 
                 if settings.RAID_JOIN_CHANNEL_ID:
                     join_ch = guild.get_channel(int(settings.RAID_JOIN_CHANNEL_ID))

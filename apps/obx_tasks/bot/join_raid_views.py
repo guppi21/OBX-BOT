@@ -115,32 +115,40 @@ class SetTwitterModal(Modal, title="🐦 SET X ACCOUNT"):
 
 
 async def grant_raider_role_to_member(guild: discord.Guild, member: discord.Member) -> Tuple[bool, str]:
-    """Helper to assign the configured ⚡ OBX Raider role."""
+    """Helper to assign the configured ⚡ OBX Raider or Raid role."""
     settings = get_settings()
-    raid_role_id = settings.RAID_ROLE_ID
+    configured_ids = [
+        settings.RAID_ROLE_ID,
+        "1539356123553996913",
+        "1544870040866787428",
+    ]
 
     role = None
-    if raid_role_id:
-        try:
-            role = guild.get_role(int(raid_role_id))
-        except (ValueError, TypeError):
-            pass
+    for rid in configured_ids:
+        if rid:
+            try:
+                role = guild.get_role(int(rid))
+                if role:
+                    break
+            except (ValueError, TypeError):
+                pass
 
     if not role:
         for r in guild.roles:
-            if r.name in ("⚡ OBX Raider", "OBX Raider"):
+            r_name = r.name.lower().strip()
+            if r_name in ("raid", "raids", "raider", "raiders", "obx raider", "⚡ obx raider") or "raid" in r_name or "raider" in r_name:
                 role = r
                 break
 
     if not role:
-        return False, "The **⚡ OBX Raider** role is not yet configured or could not be found. Please contact an administrator."
+        return False, "The raid role is not yet configured or could not be found. Please contact an administrator."
 
     try:
         await member.add_roles(role, reason="User joined the OBX Raid via onboarding flow")
-        logger.info("Assigned ⚡ OBX Raider role (%s) to user %s (%s)", role.id, member.name, member.id)
+        logger.info("Assigned raid role '%s' (%s) to user %s (%s)", role.name, role.id, member.name, member.id)
         return True, "Success"
     except discord.Forbidden:
-        return False, "Bot lacks permissions to assign the **⚡ OBX Raider** role. Please ensure the bot's role is positioned higher in server settings."
+        return False, f"Bot lacks permissions to assign the **@{role.name}** role. Please ensure the bot's role is positioned higher in server settings."
     except Exception as exc:
         return False, f"Error assigning raid role: {str(exc)}"
 

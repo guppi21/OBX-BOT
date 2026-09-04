@@ -63,15 +63,10 @@ def collect_all_raider_members(session: Session, guild: Optional[discord.Guild] 
         if row[0]:
             user_ids.add(str(row[0]))
 
-    # 5. Members with ⚡ OBX Raider role in guild
+    # 5. Members with ⚡ OBX Raider / Raid role in guild
     if guild:
-        raid_role_id = get_settings().RAID_ROLE_ID
-        role = guild.get_role(int(raid_role_id)) if raid_role_id else None
-        if not role:
-            for r in guild.roles:
-                if r.name in ("⚡ OBX Raider", "OBX Raider"):
-                    role = r
-                    break
+        from apps.obx_tasks.bot.announcement_service import resolve_raider_role
+        _, role = resolve_raider_role(guild)
         if role:
             for m in role.members:
                 user_ids.add(str(m.id))
@@ -104,10 +99,8 @@ def collect_all_raider_members(session: Session, guild: Optional[discord.Guild] 
         member = guild.get_member(int(uid)) if (guild and uid.isdigit()) else None
         if member:
             display_name = member.display_name or member.name
-            has_role = any(
-                r.name in ("⚡ OBX Raider", "OBX Raider") or str(r.id) == str(configured_role_id)
-                for r in member.roles
-            )
+            from apps.obx_tasks.bot.permissions import has_raider_role
+            has_role = has_raider_role(member)
             status = "Active" if has_role else ("Active" if (prof or count > 0) else "Inactive")
             created_at = prof.created_at if prof else member.joined_at
         else:
