@@ -249,11 +249,11 @@ async def test_on_guild_join_auto_discovers_and_initializes(db_session):
     bot.tree.copy_global_to.assert_called_with(guild=mock_guild)
     bot.tree.sync.assert_awaited_with(guild=mock_guild)
 
-    # Channels auto-discovered
+    # GuildConfig is initialized cleanly without auto-detect keyword sniffing
     config = db_session.query(GuildConfig).filter_by(guild_id="guild_join_auto").first()
     assert config is not None
-    assert config.tasks_channel_id == "3001"
-    assert config.auctions_channel_id == "3002"
+    assert config.tasks_channel_id is None
+    assert config.auctions_channel_id is None
 
     # Systems refreshed
     mock_refresh.assert_awaited_once_with(mock_guild, bot)

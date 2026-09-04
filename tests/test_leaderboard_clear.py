@@ -119,3 +119,50 @@ async def test_admin_clear_leaderboard_slash_command_flow(db_session):
     embed = call_kwargs["embed"]
     assert "CLEARED & RESET" in embed.title
     mock_deploy.assert_awaited_once_with(mock_interaction.guild, bot)
+
+
+@pytest.mark.asyncio
+async def test_on_ready_auto_clears_new_server_once(db_session):
+    from apps.obx_tasks.bot.client import OBXTaskBot
+    from packages.database.models.channel_config import GuildConfig
+    from apps.obx_core.services.wallet_service import WalletService
+
+    ws = WalletService(db_session)
+    user, _, _ = ws.get_or_create_user("user_startup_test")
+    ws.credit(discord_user_id="user_startup_test", amount=500, reference_type="test", idempotency_key="k_startup_1")
+
+    bot = MagicMock(spec=OBXTaskBot)
+    bot.user = MagicMock(id=123456, name="OBX")
+    bot.guilds = []
+    bot.tree = MagicMock()
+    bot.tree.sync = AsyncMock(return_value=[])
+
+    with patch("apps.obx_tasks.bot.client.session_scope") as mock_scope, \
+         patch("apps.obx_tasks.bot.client.get_settings") as mock_settings:
+        from contextlib import contextmanager
+        @contextmanager
+        def _scope():
+            yield db_session
+        mock_scope.side_effect = _scope
+
+        st = MagicMock()
+        st.DISCORD_GUILD_ID = "1527720394151170048"
+        st.DISCORD_ADMIN_ROLE_IDS = []
+        st.RAID_JOIN_CHANNEL_ID = None
+        st.DISCORD_TASK_CHANNEL_ID = "1545220623322714236"
+        st.DISCORD_AUCTION_CHANNEL_ID = "1545221157014474812"
+        st.DISCORD_WINNERS_CHANNEL_ID = "1545221275608285276"
+        st.DISCORD_LEADERBOARD_CHANNEL_ID = "1545221334668414996"
+        st.DISCORD_ADMIN_LOG_CHANNEL_ID = "1545221416167940146"
+        st.RAID_ROLE_ID = "1539356123553996913"
+        mock_settings.return_value = st
+
+        await OBXTaskBot.on_ready(bot)
+
+    cfg = db_session.query(GuildConfig).filter_by(guild_id="1527720394151170048").first()
+    assert cfg is not None
+    assert cfg.updated_by == "INIT_CLEARED_1527720394151170048"
+
+    from packages.database.models.wallet import Wallet
+    w = db_session.query(Wallet).filter_by(user_id=user.id).first()
+    assert w.available_balance == 0

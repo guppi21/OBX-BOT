@@ -48,27 +48,27 @@ class Settings(BaseSettings):
         description="Discord Bot OAuth2 Token",
     )
     DISCORD_GUILD_ID: Optional[str] = Field(
-        default=None,
+        default="1527720394151170048",
         description="Optional Discord Guild ID for instant slash command registration",
     )
     DISCORD_TASK_CHANNEL_ID: Optional[str] = Field(
-        default=None,
+        default="1545220623322714236",
         description="Optional channel ID for persistent OBX Task Dashboard",
     )
     DISCORD_AUCTION_CHANNEL_ID: Optional[str] = Field(
-        default=None,
+        default="1545221157014474812",
         description="Optional channel ID for persistent OBX Auctions",
     )
     DISCORD_LEADERBOARD_CHANNEL_ID: Optional[str] = Field(
-        default=None,
+        default="1545221334668414996",
         description="Optional channel ID for persistent OBX Leaderboard",
     )
     DISCORD_WINNERS_CHANNEL_ID: Optional[str] = Field(
-        default=None,
+        default="1545221275608285276",
         description="Optional channel ID for OBX Winner Announcements",
     )
     DISCORD_ADMIN_LOG_CHANNEL_ID: Optional[str] = Field(
-        default=None,
+        default="1545221416167940146",
         description="Optional channel ID for OBX Admin Logs",
     )
     ENABLE_STATIC_CHANNEL_BANNERS: bool = Field(
@@ -88,7 +88,7 @@ class Settings(BaseSettings):
         description="Optional Discord role ID to mention for new task alerts",
     )
     RAID_ROLE_ID: Optional[str] = Field(
-        default=None,
+        default="1539356123553996913",
         description="Unified universal membership role ID for ⚡ OBX Raider",
     )
     RAID_JOIN_CHANNEL_ID: Optional[str] = Field(

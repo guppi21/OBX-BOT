@@ -114,22 +114,22 @@ class ChannelService:
         is_target_guild = (settings.DISCORD_GUILD_ID is not None and str(guild_id_str) == str(settings.DISCORD_GUILD_ID))
 
         if is_target_guild:
-            if not config.tasks_channel_id and settings.DISCORD_TASK_CHANNEL_ID:
+            if settings.DISCORD_TASK_CHANNEL_ID and config.tasks_channel_id != str(settings.DISCORD_TASK_CHANNEL_ID):
                 config.tasks_channel_id = str(settings.DISCORD_TASK_CHANNEL_ID)
                 changed = True
-            if not config.auctions_channel_id and settings.DISCORD_AUCTION_CHANNEL_ID:
+            if settings.DISCORD_AUCTION_CHANNEL_ID and config.auctions_channel_id != str(settings.DISCORD_AUCTION_CHANNEL_ID):
                 config.auctions_channel_id = str(settings.DISCORD_AUCTION_CHANNEL_ID)
                 changed = True
-            if not config.leaderboard_channel_id and settings.DISCORD_LEADERBOARD_CHANNEL_ID:
+            if settings.DISCORD_LEADERBOARD_CHANNEL_ID and config.leaderboard_channel_id != str(settings.DISCORD_LEADERBOARD_CHANNEL_ID):
                 config.leaderboard_channel_id = str(settings.DISCORD_LEADERBOARD_CHANNEL_ID)
                 changed = True
-            if not config.winners_channel_id and settings.DISCORD_WINNERS_CHANNEL_ID:
+            if settings.DISCORD_WINNERS_CHANNEL_ID and config.winners_channel_id != str(settings.DISCORD_WINNERS_CHANNEL_ID):
                 config.winners_channel_id = str(settings.DISCORD_WINNERS_CHANNEL_ID)
                 changed = True
-            if not config.admin_channel_id and settings.DISCORD_ADMIN_LOG_CHANNEL_ID:
+            if settings.DISCORD_ADMIN_LOG_CHANNEL_ID and config.admin_channel_id != str(settings.DISCORD_ADMIN_LOG_CHANNEL_ID):
                 config.admin_channel_id = str(settings.DISCORD_ADMIN_LOG_CHANNEL_ID)
                 changed = True
-            if not config.task_alerts_role_id and settings.RAID_ROLE_ID:
+            if settings.RAID_ROLE_ID and config.task_alerts_role_id != str(settings.RAID_ROLE_ID):
                 config.task_alerts_role_id = str(settings.RAID_ROLE_ID)
                 changed = True
 

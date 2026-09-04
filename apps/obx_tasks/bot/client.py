@@ -568,17 +568,33 @@ class OBXTaskBot(commands.Bot):
             except Exception as sync_err:
                 logger.debug("Could not direct-sync commands to guild '%s': %s", g.name, sync_err)
 
-        # Auto-discover channels and raid roles across all connected guilds
+        # Ensure guild channels and settings are synced (auto-detect disabled)
         for g in self.guilds:
             try:
                 with session_scope() as session:
                     from apps.obx_tasks.services.channel_service import ChannelService
                     ch_service = ChannelService(session)
-                    discovered = ch_service.auto_discover_guild_channels(g)
-                    if discovered:
-                        logger.info("Auto-discovered channels/roles for guild '%s' (ID: %s): %s", g.name, g.id, discovered)
-            except Exception as disc_err:
-                logger.warning("Error auto-discovering channels for guild '%s': %s", g.name, disc_err)
+                    ch_service.get_or_create_guild_config(str(g.id))
+            except Exception as cfg_err:
+                logger.warning("Error initializing channel config for guild '%s': %s", g.name, cfg_err)
+
+        # One-time automated leaderboard wipe for new server transition
+        target_guild_id = "1527720394151170048"
+        try:
+            with session_scope() as session:
+                from apps.obx_tasks.services.channel_service import ChannelService
+                from apps.obx_tasks.services.leaderboard_service import LeaderboardService
+                ch_s = ChannelService(session)
+                cfg = ch_s.get_or_create_guild_config(target_guild_id)
+                wipe_flag = f"INIT_CLEARED_{target_guild_id}"
+                if cfg.updated_by != wipe_flag:
+                    lb_s = LeaderboardService(session)
+                    stats = lb_s.clear_leaderboard_data()
+                    cfg.updated_by = wipe_flag
+                    session.commit()
+                    logger.info("One-time automated leaderboard reset completed for guild %s: %s", target_guild_id, stats)
+        except Exception as init_err:
+            logger.error("Error executing initial leaderboard reset for target guild: %s", init_err)
 
         # Auto-deploy / refresh public systems across configured channels
         for g in self.guilds:
@@ -608,16 +624,14 @@ class OBXTaskBot(commands.Bot):
         except Exception as exc:
             logger.error("Error synchronizing slash commands on guild join for '%s': %s", guild.name, exc)
 
-        # Auto-discover channels and raid role on join
+        # Initialize guild configuration on join (auto-detect disabled)
         try:
             with session_scope() as session:
                 from apps.obx_tasks.services.channel_service import ChannelService
                 ch_service = ChannelService(session)
-                discovered = ch_service.auto_discover_guild_channels(guild)
-                if discovered:
-                    logger.info("Auto-discovered channels/roles on join for guild '%s': %s", guild.name, discovered)
-        except Exception as disc_err:
-            logger.warning("Error auto-discovering channels on join for guild '%s': %s", guild.name, disc_err)
+                ch_service.get_or_create_guild_config(str(guild.id))
+        except Exception as cfg_err:
+            logger.warning("Error initializing guild config on join for '%s': %s", guild.name, cfg_err)
 
         # Auto-deploy public systems to the newly discovered channels
         try:
