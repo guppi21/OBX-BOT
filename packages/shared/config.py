@@ -76,7 +76,7 @@ class Settings(BaseSettings):
         description="Whether to post static info/help header cards to channels (disabled by default)",
     )
     DISCORD_ADMIN_ROLE_ID: Optional[str] = Field(
-        default=None,
+        default="1527762243381493770",
         description="Single Discord role ID permitted for admin task commands",
     )
     DISCORD_ADMIN_ROLE_IDS: List[str] = Field(
@@ -92,7 +92,7 @@ class Settings(BaseSettings):
         description="Unified universal membership role ID for ⚡ OBX Raider",
     )
     RAID_JOIN_CHANNEL_ID: Optional[str] = Field(
-        default=None,
+        default="1545227705883295784",
         description="Discord channel ID for the #⚡・join-raid onboarding channel",
     )
     ENABLE_EVERYONE_ANNOUNCEMENTS: bool = Field(
@@ -191,10 +191,14 @@ class Settings(BaseSettings):
             self.INTERNAL_API_TOKEN = self.OBX_CORE_INTERNAL_AUTH_TOKEN
 
         # Merge DISCORD_ADMIN_ROLE_ID into DISCORD_ADMIN_ROLE_IDS
-        if self.DISCORD_ADMIN_ROLE_ID and self.DISCORD_ADMIN_ROLE_ID not in self.DISCORD_ADMIN_ROLE_IDS:
-            self.DISCORD_ADMIN_ROLE_IDS.append(self.DISCORD_ADMIN_ROLE_ID)
-        elif not self.DISCORD_ADMIN_ROLE_ID and self.DISCORD_ADMIN_ROLE_IDS:
-            self.DISCORD_ADMIN_ROLE_ID = self.DISCORD_ADMIN_ROLE_IDS[0]
+        if "DISCORD_ADMIN_ROLE_IDS" in self.model_fields_set and "DISCORD_ADMIN_ROLE_ID" not in self.model_fields_set:
+            if self.DISCORD_ADMIN_ROLE_IDS:
+                self.DISCORD_ADMIN_ROLE_ID = self.DISCORD_ADMIN_ROLE_IDS[0]
+        else:
+            if self.DISCORD_ADMIN_ROLE_ID and self.DISCORD_ADMIN_ROLE_ID not in self.DISCORD_ADMIN_ROLE_IDS:
+                self.DISCORD_ADMIN_ROLE_IDS.append(self.DISCORD_ADMIN_ROLE_ID)
+            elif not self.DISCORD_ADMIN_ROLE_ID and self.DISCORD_ADMIN_ROLE_IDS:
+                self.DISCORD_ADMIN_ROLE_ID = self.DISCORD_ADMIN_ROLE_IDS[0]
 
         return self
 
