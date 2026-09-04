@@ -179,6 +179,34 @@ class ChannelConfigView(View):
         view = ChannelSelectPromptView(channel_key="economy", display_name="💰 Economy Activity Channel")
         await interaction.response.send_message("Select destination channel for **Optional Economy Activity**:", view=view, ephemeral=True)
 
+    @discord.ui.button(label="Auto-Detect", emoji="🔍", style=discord.ButtonStyle.success, row=2)
+    async def btn_auto_detect(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
+
+        if not interaction.guild:
+            await interaction.response.send_message("❌ Must be run inside a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            with session_scope() as session:
+                service = ChannelService(session)
+                discovered = service.auto_discover_guild_channels(interaction.guild, overwrite=True)
+                config = service.get_or_create_guild_config(str(interaction.guild.id))
+
+            embed = build_channel_config_embed(interaction.guild, config)
+            if discovered:
+                summary = "🔍 **Auto-Detected Mappings:**\n" + "\n".join([f"• **{k.capitalize()}**: `{v}`" for k, v in discovered.items()])
+            else:
+                summary = "🔍 Channels verified against server layout."
+            embed.description = f"{summary}\n\n{embed.description}"
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as exc:
+            logger.error("Error in auto-detect button: %s", exc)
+            await interaction.followup.send(f"❌ Error auto-detecting channels: {exc}", ephemeral=True)
+
     @discord.ui.button(label="Refresh", style=discord.ButtonStyle.secondary, row=2)
     async def btn_refresh(self, interaction: discord.Interaction, button: Button):
         await handle_channel_config(interaction)

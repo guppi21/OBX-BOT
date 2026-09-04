@@ -568,6 +568,18 @@ class OBXTaskBot(commands.Bot):
             except Exception as sync_err:
                 logger.debug("Could not direct-sync commands to guild '%s': %s", g.name, sync_err)
 
+        # Auto-discover channels and raid roles across all connected guilds
+        for g in self.guilds:
+            try:
+                with session_scope() as session:
+                    from apps.obx_tasks.services.channel_service import ChannelService
+                    ch_service = ChannelService(session)
+                    discovered = ch_service.auto_discover_guild_channels(g)
+                    if discovered:
+                        logger.info("Auto-discovered channels/roles for guild '%s' (ID: %s): %s", g.name, g.id, discovered)
+            except Exception as disc_err:
+                logger.warning("Error auto-discovering channels for guild '%s': %s", g.name, disc_err)
+
         # Auto-deploy / refresh public systems across configured channels
         for g in self.guilds:
             try:
@@ -595,6 +607,24 @@ class OBXTaskBot(commands.Bot):
             logger.info("Automatically synchronized %d slash commands to guild '%s' on join!", len(synced), guild.name)
         except Exception as exc:
             logger.error("Error synchronizing slash commands on guild join for '%s': %s", guild.name, exc)
+
+        # Auto-discover channels and raid role on join
+        try:
+            with session_scope() as session:
+                from apps.obx_tasks.services.channel_service import ChannelService
+                ch_service = ChannelService(session)
+                discovered = ch_service.auto_discover_guild_channels(guild)
+                if discovered:
+                    logger.info("Auto-discovered channels/roles on join for guild '%s': %s", guild.name, discovered)
+        except Exception as disc_err:
+            logger.warning("Error auto-discovering channels on join for guild '%s': %s", guild.name, disc_err)
+
+        # Auto-deploy public systems to the newly discovered channels
+        try:
+            res = await refresh_all_public_systems(guild, self)
+            logger.info("Public systems initialized for new guild '%s': %s", guild.name, res)
+        except Exception as pub_err:
+            logger.warning("Error deploying public systems on guild join for '%s': %s", guild.name, pub_err)
 
     async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         logger.error("Discord interaction failure on command '%s': %s", interaction.command.name if interaction.command else "unknown", error)
@@ -974,6 +1004,45 @@ def create_discord_bot() -> OBXTaskBot:
     @bot.tree.command(name="admin-configure-channels", description="[Admin] Open interactive channel routing dashboard")
     async def admin_configure_channels_command(interaction: discord.Interaction):
         await handle_channel_config(interaction)
+
+    @bot.tree.command(name="admin-auto-detect-channels", description="[Admin] Automatically scan and map all channels and raid role in this server")
+    async def admin_auto_detect_channels_command(interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
+
+        if not interaction.guild:
+            await interaction.response.send_message("❌ This command must be executed inside a server.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            from apps.obx_tasks.services.channel_service import ChannelService
+            from apps.obx_tasks.bot.channel_views import build_channel_config_embed
+            from apps.obx_tasks.bot.announcement_service import refresh_all_public_systems
+
+            with session_scope() as session:
+                ch_service = ChannelService(session)
+                discovered = ch_service.auto_discover_guild_channels(interaction.guild, overwrite=True)
+                config = ch_service.get_or_create_guild_config(str(interaction.guild.id))
+
+            # Trigger refresh of systems across newly mapped channels
+            await refresh_all_public_systems(interaction.guild, bot)
+
+            summary_lines = []
+            if discovered:
+                for k, v in discovered.items():
+                    summary_lines.append(f"• **{k.capitalize()}**: `{v}`")
+                desc = "Successfully scanned and mapped server channels:\n" + "\n".join(summary_lines)
+            else:
+                desc = "Scan completed. Existing channels were already matched or no new matches found."
+
+            embed = build_channel_config_embed(interaction.guild, config)
+            embed.description = f"{desc}\n\n{embed.description}"
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as exc:
+            logger.error("Error auto-detecting channels: %s", exc)
+            await interaction.followup.send(f"❌ Error scanning channels: {exc}", ephemeral=True)
 
     @bot.tree.command(name="admin-refresh-public-systems", description="[Admin] Refresh all public dashboards and leaderboards across configured channels")
     async def admin_refresh_public_systems_command(interaction: discord.Interaction):

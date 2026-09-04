@@ -419,6 +419,18 @@ def resolve_channel_for_feature(
             pass
 
     if name_keywords and hasattr(guild, "text_channels"):
+        from apps.obx_tasks.services.channel_service import score_channel_match
+        best_ch = None
+        best_score = 0
+        for ch in guild.text_channels:
+            score = score_channel_match(ch.name, name_keywords)
+            if score > best_score:
+                best_score = score
+                best_ch = ch
+        if best_ch and best_score >= 20:
+            return best_ch
+
+        # Fallback to simple substring match for backward compatibility
         for ch in guild.text_channels:
             name_lower = ch.name.lower()
             if any(kw.lower() in name_lower for kw in name_keywords):
@@ -790,12 +802,17 @@ async def send_admin_log_event(
             ch_service = ChannelService(session)
             config = ch_service.get_or_create_guild_config(str(guild.id))
             channel_id = getattr(config, "admin_logs_channel_id", None) or getattr(config, "admin_channel_id", None) or get_settings().DISCORD_ADMIN_LOG_CHANNEL_ID
-            if not channel_id:
-                return
-
-            channel = guild.get_channel(int(channel_id))
+            channel = resolve_channel_for_feature(
+                guild,
+                explicit_id=channel_id,
+                name_keywords=["admin-logs", "admin-log", "admin_logs", "admin_log", "admin-hub", "admin", "mod-logs", "bot-logs", "audit", "obx-admin"],
+            )
             if not channel or not isinstance(channel, discord.TextChannel):
                 return
+
+            if not config.admin_channel_id:
+                config.admin_channel_id = str(channel.id)
+                session.commit()
 
             embed = discord.Embed(title=title, description=description, color=color, timestamp=datetime.now(timezone.utc))
             if fields:

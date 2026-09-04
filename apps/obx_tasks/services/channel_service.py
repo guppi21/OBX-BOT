@@ -25,6 +25,72 @@ CHANNEL_KEYS = {
     "economy": "economy_channel_id",
 }
 
+FEATURE_CHANNEL_KEYWORDS: Dict[str, List[str]] = {
+    "admin": [
+        "admin-logs", "admin-log", "admin_logs", "admin_log", "admin-hub",
+        "obx-admin", "admin", "mod-logs", "mod-log", "bot-logs", "audit", "obx-logs",
+    ],
+    "winners": [
+        "winners", "winner", "results", "result", "auction-results", "wl-winners",
+        "obx-winners", "proof-of-win",
+    ],
+    "auctions": [
+        "auctions", "auction", "whitelist", "wl-auctions", "wl-sale", "bids",
+        "obx-auctions", "market", "marketplace",
+    ],
+    "tasks": [
+        "tasks", "task", "missions", "mission", "bounties", "bounty",
+        "raid-tasks", "raids", "obx-tasks", "daily-tasks", "quest-board", "quests", "earn-obx",
+    ],
+    "leaderboard": [
+        "leaderboard", "leaderboards", "top-raiders", "top-earners", "ranking",
+        "rankings", "scoreboard", "ranks", "obx-leaderboard",
+    ],
+    "economy": [
+        "economy", "wallet", "balances", "bank", "vault",
+    ],
+}
+
+
+def score_channel_match(channel_name: Any, keywords: List[str]) -> int:
+    """Score how well a channel name matches a list of keywords.
+    Returns:
+        100: Exact match after stripping emojis/symbols (e.g. 'tasks', '🏆-tasks' -> 'tasks')
+        80: Exact token match within hyphenated/spaced parts (e.g. 'obx-tasks' has token 'tasks')
+        50: Prefix or suffix match (e.g. 'tasks-hub', 'daily-tasks')
+        20: Substring match (e.g. 'missions' in 'active-missions-v2')
+        0: No match
+    """
+    if not channel_name:
+        return 0
+    raw_name = getattr(channel_name, "name", channel_name)
+    if not isinstance(raw_name, str):
+        raw_name = str(raw_name)
+
+    import re
+    clean = re.sub(r'[^a-z0-9]+', '-', raw_name.lower()).strip('-')
+    tokens = [t for t in clean.split('-') if t]
+
+    best_score = 0
+    for kw in keywords:
+        kw_clean = re.sub(r'[^a-z0-9]+', '-', kw.lower()).strip('-')
+        kw_tokens = [t for t in kw_clean.split('-') if t]
+
+        if clean == kw_clean:
+            return 100
+
+        if len(kw_tokens) == 1 and kw_tokens[0] in tokens:
+            best_score = max(best_score, 80)
+        elif len(kw_tokens) > 1 and kw_clean in clean:
+            best_score = max(best_score, 80)
+        elif clean.startswith(kw_clean + "-") or clean.endswith("-" + kw_clean):
+            best_score = max(best_score, 50)
+        elif kw_clean in clean:
+            best_score = max(best_score, 20)
+
+    return best_score
+
+
 
 class ChannelService:
     def __init__(self, session: Session):
@@ -160,3 +226,93 @@ class ChannelService:
             self.session.commit()
             return True
         return False
+
+    def auto_discover_guild_channels(self, guild: Any, overwrite: bool = False) -> Dict[str, str]:
+        """Auto-discover relevant channels and raid role in a Discord guild and store in GuildConfig.
+
+        Matches channels against keywords for:
+        - admin (admin-logs, mod-logs, etc.)
+        - winners (winners, results, etc.)
+        - auctions (auctions, whitelist, etc.)
+        - tasks (tasks, missions, bounties, etc.)
+        - leaderboard (leaderboard, rankings, etc.)
+        - economy (economy, wallet, balances, etc.)
+        And discovers the raider role.
+
+        Returns a dictionary of discovered mappings (feature_name -> channel/role name).
+        """
+        if not guild or not hasattr(guild, "id"):
+            return {}
+
+        guild_id_str = str(guild.id).strip()
+        config = self.get_or_create_guild_config(guild_id_str)
+        text_channels = getattr(guild, "text_channels", None)
+        if text_channels is None and hasattr(guild, "channels"):
+            text_channels = [c for c in guild.channels if getattr(c, "type", None) == 0 or getattr(c, "__class__", None).__name__ == "TextChannel" or hasattr(c, "send")]
+        elif text_channels is None:
+            text_channels = []
+
+        discovered: Dict[str, str] = {}
+        assigned_channel_ids = set()
+
+        feature_order = ["admin", "winners", "auctions", "tasks", "leaderboard", "economy"]
+
+        for feat in feature_order:
+            field_name = CHANNEL_KEYS.get(feat)
+            if not field_name:
+                continue
+
+            current_val = getattr(config, field_name, None)
+            if current_val and not overwrite:
+                existing_ch = guild.get_channel(int(current_val)) if hasattr(guild, "get_channel") else None
+                if existing_ch:
+                    assigned_channel_ids.add(str(existing_ch.id))
+                    continue
+
+            keywords = FEATURE_CHANNEL_KEYWORDS.get(feat, [])
+            best_ch = None
+            best_score = 0
+
+            for ch in text_channels:
+                ch_id_str = str(ch.id)
+                if ch_id_str in assigned_channel_ids:
+                    continue
+
+                ch_name = getattr(ch, "name", "")
+                score = score_channel_match(ch_name, keywords)
+                if score > best_score:
+                    best_score = score
+                    best_ch = ch
+
+            if best_ch and best_score >= 20:
+                setattr(config, field_name, str(best_ch.id))
+                assigned_channel_ids.add(str(best_ch.id))
+                discovered[feat] = getattr(best_ch, "name", str(best_ch.id))
+                logger.info(
+                    "Auto-discovered channel for '%s' in guild '%s': #%s (score=%d)",
+                    feat, getattr(guild, "name", guild_id_str), getattr(best_ch, "name", best_ch.id), best_score,
+                )
+
+        # Auto-discover raider role
+        if not config.task_alerts_role_id or overwrite:
+            try:
+                from apps.obx_tasks.bot.announcement_service import resolve_raider_role
+                r_id, r_obj = resolve_raider_role(guild)
+                if r_id:
+                    config.task_alerts_role_id = str(r_id)
+                    discovered["role"] = getattr(r_obj, "name", str(r_id))
+                    logger.info(
+                        "Auto-discovered raid role in guild '%s': @%s (ID: %s)",
+                        getattr(guild, "name", guild_id_str), getattr(r_obj, "name", r_id), r_id,
+                    )
+            except Exception as r_err:
+                logger.debug("Could not auto-discover raid role for guild '%s': %s", guild_id_str, r_err)
+
+        if discovered:
+            config.updated_at = datetime.now(timezone.utc)
+            config.updated_by = "AUTO_DISCOVERY"
+            self.session.commit()
+            self.session.refresh(config)
+
+        return discovered
+
