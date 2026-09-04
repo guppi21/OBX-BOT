@@ -78,5 +78,50 @@ async def check_raider_access(interaction: discord.Interaction) -> bool:
     if has_role and has_twitter:
         return True
 
-    await handle_join_raid_click(interaction)
-    return False
+    from apps.obx_tasks.bot.ui_theme import COLOR_GOLD
+    from discord.ui import View, Button
+
+    if not has_role:
+        embed = discord.Embed(
+            title="⚔️ JOIN THE OBX RAID",
+            description=(
+                "You need the **Raid** role to participate in missions and auctions.\n\n"
+                "Click **JOIN RAID** below to get the role!"
+            ),
+            color=COLOR_GOLD,
+        )
+        view = View(timeout=None)
+        view.add_item(Button(
+            label="JOIN RAID",
+            style=discord.ButtonStyle.success,
+            custom_id="obx:join_raid:activate",
+        ))
+        view.add_item(Button(
+            label="Set X Account",
+            style=discord.ButtonStyle.primary,
+            custom_id="obx:raider:set_twitter",
+        ))
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        return False
+    else:
+        embed = discord.Embed(
+            title="⚔️ CONNECT YOUR X ACCOUNT",
+            description=(
+                "Connect your X account to participate in community raids and whitelist auctions."
+            ),
+            color=COLOR_GOLD,
+        )
+        view = View(timeout=None)
+        view.add_item(Button(
+            label="Set X Account",
+            style=discord.ButtonStyle.primary,
+            custom_id="obx:raider:set_twitter",
+        ))
+        if interaction.response.is_done():
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+        else:
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        return False

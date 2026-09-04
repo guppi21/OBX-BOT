@@ -114,6 +114,26 @@ class SetTwitterModal(Modal, title="🐦 SET X ACCOUNT"):
         await interaction.followup.send(embed=embed, ephemeral=True)
 
 
+def member_has_physical_raid_role(member: discord.Member, guild: discord.Guild) -> bool:
+    """Check if the member physically has the raid role in their member.roles list."""
+    settings = get_settings()
+    configured_ids = {
+        str(settings.RAID_ROLE_ID) if settings.RAID_ROLE_ID else None,
+        "1539356123553996913",
+        "1544870040866787428",
+    }
+    configured_ids.discard(None)
+
+    for r in getattr(member, "roles", []):
+        if str(r.id) in configured_ids:
+            return True
+        r_name = r.name.lower().strip()
+        if r_name in ("raid", "raids", "raider", "raiders", "obx raider", "⚡ obx raider") or "raid" in r_name or "raider" in r_name:
+            return True
+
+    return False
+
+
 async def grant_raider_role_to_member(guild: discord.Guild, member: discord.Member) -> Tuple[bool, str]:
     """Helper to assign the configured ⚡ OBX Raider or Raid role."""
     settings = get_settings()
@@ -134,6 +154,16 @@ async def grant_raider_role_to_member(guild: discord.Guild, member: discord.Memb
                 pass
 
     if not role:
+        try:
+            fetched_roles = await guild.fetch_roles()
+            for r in fetched_roles:
+                if str(r.id) in configured_ids:
+                    role = r
+                    break
+        except Exception:
+            pass
+
+    if not role:
         for r in guild.roles:
             r_name = r.name.lower().strip()
             if r_name in ("raid", "raids", "raider", "raiders", "obx raider", "⚡ obx raider") or "raid" in r_name or "raider" in r_name:
@@ -148,96 +178,18 @@ async def grant_raider_role_to_member(guild: discord.Guild, member: discord.Memb
         logger.info("Assigned raid role '%s' (%s) to user %s (%s)", role.name, role.id, member.name, member.id)
         return True, "Success"
     except discord.Forbidden:
-        return False, f"Bot lacks permissions to assign the **@{role.name}** role. Please ensure the bot's role is positioned higher in server settings."
+        return False, f"Bot lacks permissions to assign the **@{role.name}** role. Please ensure the bot's role is positioned HIGHER than the **@{role.name}** role in Server Settings > Roles, and has the 'Manage Roles' permission enabled."
     except Exception as exc:
         return False, f"Error assigning raid role: {str(exc)}"
 
 
 async def handle_join_raid_click(interaction: discord.Interaction):
-    """Callback when a user clicks the [ ⚔️ JOIN THE RAID ] or [ ⚔️ JOIN RAID ] button."""
+    """Callback when a user clicks the [ JOIN THE RAID ] or [ JOIN RAID ] button."""
     guild = interaction.guild
     if not guild:
         await interaction.response.send_message("❌ This action must be performed within a server.", ephemeral=True)
         return
 
-    # Fetch user's RaiderProfile
-    with session_scope() as session:
-        r_service = RaiderService(session)
-        profile = r_service.get_raider_profile(str(interaction.user.id))
-        twitter_handle = profile.twitter_handle if profile else None
-
-    has_role = has_raider_role(interaction)
-
-    # State 1: Already has role AND has Twitter handle
-    if has_role and twitter_handle:
-        embed = discord.Embed(
-            title="⚔️ OBX RAIDER ACTIVE",
-            description=(
-                f"𝕏 **CONNECTED ACCOUNT**\n"
-                f"@{twitter_handle}"
-            ),
-            color=COLOR_GREEN,
-        )
-        view = View(timeout=None)
-        view.add_item(Button(
-            label="EDIT TWITTER",
-            style=discord.ButtonStyle.secondary,
-            custom_id="obx:raider:set_twitter",
-        ))
-        if interaction.response.is_done():
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        else:
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        return
-
-    # State 2: Has role BUT missing Twitter handle
-    if has_role and not twitter_handle:
-        embed = discord.Embed(
-            title="⚔️ CONNECT YOUR X ACCOUNT",
-            description=(
-                "Set your X account to participate in community raids and whitelist auctions."
-            ),
-            color=COLOR_GOLD,
-        )
-        view = View(timeout=None)
-        view.add_item(Button(
-            label="Set X Account",
-            style=discord.ButtonStyle.primary,
-            custom_id="obx:raider:set_twitter",
-        ))
-        if interaction.response.is_done():
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        else:
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        return
-
-    # State 3: Missing role AND missing Twitter handle
-    if not has_role and not twitter_handle:
-        embed = discord.Embed(
-            title="⚔️ JOIN THE OBX RAID",
-            description=(
-                "Set your X account first, then join the raider program."
-            ),
-            color=COLOR_GOLD,
-        )
-        view = View(timeout=None)
-        view.add_item(Button(
-            label="Set X Account",
-            style=discord.ButtonStyle.primary,
-            custom_id="obx:raider:set_twitter",
-        ))
-        view.add_item(Button(
-            label="JOIN RAID",
-            style=discord.ButtonStyle.success,
-            custom_id="obx:join_raid:activate",
-        ))
-        if interaction.response.is_done():
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        else:
-            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        return
-
-    # State 4: Missing role BUT has Twitter handle -> Grant role!
     member = interaction.user
     if not isinstance(member, discord.Member):
         member = guild.get_member(interaction.user.id)
@@ -248,37 +200,70 @@ async def handle_join_raid_click(interaction: discord.Interaction):
                 await interaction.response.send_message("❌ Could not resolve your server member profile.", ephemeral=True)
                 return
 
-    ok, err_msg = await grant_raider_role_to_member(guild, member)
-    if not ok:
-        if interaction.response.is_done():
-            await interaction.followup.send(f"❌ {err_msg}", ephemeral=True)
-        else:
-            await interaction.response.send_message(f"❌ {err_msg}", ephemeral=True)
-        return
+    has_role = member_has_physical_raid_role(member, guild)
 
-    desc_lines = [
-        "Welcome to the OBX Raiders.",
-        "",
-        "𝕏 **X ACCOUNT**",
-        f"@{twitter_handle}",
-        "",
-        "You now have access to:",
-        "",
-        "✦ Community Raids",
-        "🎟️ Whitelist Auctions",
-        "🏆 Results & Rewards",
-    ]
-    embed = discord.Embed(
-        title="⚔️ YOU'RE IN",
-        description="\n".join(desc_lines),
-        color=COLOR_GREEN,
-    )
-    view = View(timeout=None)
-    view.add_item(Button(
-        label="EDIT TWITTER",
-        style=discord.ButtonStyle.secondary,
-        custom_id="obx:raider:set_twitter",
-    ))
+    # If member does not physically have the raid role yet, assign it immediately!
+    if not has_role:
+        ok, err_msg = await grant_raider_role_to_member(guild, member)
+        if not ok:
+            if interaction.response.is_done():
+                await interaction.followup.send(f"❌ {err_msg}", ephemeral=True)
+            else:
+                await interaction.response.send_message(f"❌ {err_msg}", ephemeral=True)
+            return
+
+    already_had_role = has_role
+
+    # Fetch user's RaiderProfile (X handle)
+    with session_scope() as session:
+        r_service = RaiderService(session)
+        profile = r_service.get_raider_profile(str(interaction.user.id))
+        twitter_handle = profile.twitter_handle if profile else None
+
+    if twitter_handle:
+        desc_lines = [
+            "Welcome to the OBX Raiders." if not already_had_role else "You are an active OBX Raider.",
+            "",
+            "𝕏 **CONNECTED ACCOUNT**",
+            f"@{twitter_handle}",
+            "",
+            "You have the Raid role and access to:",
+            "✦ Community Raids",
+            "🎟️ Whitelist Auctions",
+            "🏆 Results & Rewards",
+        ]
+        embed = discord.Embed(
+            title="⚔️ OBX RAIDER ACTIVE" if already_had_role else "⚔️ YOU'RE IN",
+            description="\n".join(desc_lines),
+            color=COLOR_GREEN,
+        )
+        view = View(timeout=None)
+        view.add_item(Button(
+            label="EDIT TWITTER",
+            style=discord.ButtonStyle.secondary,
+            custom_id="obx:raider:set_twitter",
+        ))
+    else:
+        desc_lines = [
+            "Welcome to the OBX Raiders." if not already_had_role else "You already have the **Raid** role! ⚔️",
+            "",
+            "You have been granted the **Raid** role! ⚔️" if not already_had_role else "Connect your X account below to complete missions and participate in whitelist auctions.",
+            "",
+            "Connect your X account below to complete missions and participate in whitelist auctions." if not already_had_role else "",
+        ]
+        filtered_lines = [l for l in desc_lines if l is not None]
+        embed = discord.Embed(
+            title="⚔️ CONNECT YOUR X ACCOUNT" if already_had_role else "⚔️ YOU'RE IN",
+            description="\n".join(filtered_lines),
+            color=COLOR_GREEN if not already_had_role else COLOR_GOLD,
+        )
+        view = View(timeout=None)
+        view.add_item(Button(
+            label="Set X Account",
+            style=discord.ButtonStyle.primary,
+            custom_id="obx:raider:set_twitter",
+        ))
+
     if interaction.response.is_done():
         await interaction.followup.send(embed=embed, view=view, ephemeral=True)
     else:
@@ -286,16 +271,5 @@ async def handle_join_raid_click(interaction: discord.Interaction):
 
 
 async def handle_activate_join_raid_click(interaction: discord.Interaction):
-    """Callback when user clicks [ ⚔️ JOIN RAID ] from an onboarding screen."""
-    with session_scope() as session:
-        r_service = RaiderService(session)
-        profile = r_service.get_raider_profile(str(interaction.user.id))
-
-    if not profile or not profile.twitter_handle:
-        await interaction.response.send_message(
-            "⚠️ Set your X account first. Click **[ 🐦 Set X Account ]** to connect your X account before joining the raid.",
-            ephemeral=True,
-        )
-        return
-
+    """Callback when user clicks [ JOIN RAID ] from an onboarding screen."""
     await handle_join_raid_click(interaction)

@@ -149,7 +149,8 @@ async def test_simplified_task_submit_modal(db_session):
 async def test_join_raid_onboarding_state_machine(db_session):
     """Verify all 4 states of the Join Raid flow."""
     mock_guild = MagicMock(spec=discord.Guild, id="g_test")
-    mock_role = MagicMock(id=998877, name="⚡ OBX Raider")
+    mock_role = MagicMock(id=998877)
+    mock_role.name = "⚡ OBX Raider"
     mock_guild.get_role.return_value = mock_role
     mock_guild.roles = [mock_role]
 
@@ -167,54 +168,45 @@ async def test_join_raid_onboarding_state_machine(db_session):
 
     r_service = RaiderService(db_session)
 
-    # State 1: No role, No Twitter -> shows Set X Account and JOIN RAID
-    with patch("apps.obx_tasks.bot.join_raid_views.session_scope", lambda: mock_session_scope_for(db_session)), \
-         patch("apps.obx_tasks.bot.join_raid_views.has_raider_role", return_value=False):
+    # State 1: No role, No Twitter -> grants role immediately and shows Set X Account
+    with patch("apps.obx_tasks.bot.join_raid_views.session_scope", lambda: mock_session_scope_for(db_session)):
         await handle_join_raid_click(mock_intr)
 
+    mock_member.add_roles.assert_awaited_once()
     mock_intr.response.send_message.assert_awaited_once()
     kw1 = mock_intr.response.send_message.call_args[1]
-    assert kw1["embed"].title == "⚔️ JOIN THE OBX RAID"
+    assert kw1["embed"].title == "⚔️ YOU'RE IN"
     labels1 = [b.label for b in kw1["view"].children if hasattr(b, "label")]
     assert "Set X Account" in labels1
-    assert "JOIN RAID" in labels1
 
-    # State 2: User clicks Join Raid before setting Twitter -> blocked
-    mock_intr.response.reset_mock()
-    with patch("apps.obx_tasks.bot.join_raid_views.session_scope", lambda: mock_session_scope_for(db_session)):
-        await handle_activate_join_raid_click(mock_intr)
-    assert "Set your X account first" in mock_intr.response.send_message.call_args[0][0]
-
-    # State 3: User registers Twitter -> now has Twitter, but not role yet
+    # State 2: User registers Twitter -> now has Twitter
     r_service.set_raider_twitter("u_onboarding", "@RaiderAlpha")
     mock_intr.response.reset_mock()
+    mock_member.add_roles.reset_mock()
     with patch("apps.obx_tasks.bot.join_raid_views.session_scope", lambda: mock_session_scope_for(db_session)), \
-         patch("apps.obx_tasks.bot.join_raid_views.has_raider_role", return_value=False), \
          patch("apps.obx_tasks.bot.join_raid_views.get_settings") as s:
         s.return_value.RAID_ROLE_ID = "998877"
         await handle_activate_join_raid_click(mock_intr)
 
-    # Role granted!
-    mock_member.add_roles.assert_awaited_once()
+    kw2 = mock_intr.response.send_message.call_args[1]
+    assert kw2["embed"].title == "⚔️ YOU'RE IN"
+    assert "@RaiderAlpha" in kw2["embed"].description
+    labels2 = [b.label for b in kw2["view"].children if hasattr(b, "label")]
+    assert "EDIT TWITTER" in labels2
+
+    # State 3: User already has role and has Twitter
+    mock_member.roles = [mock_role]
+    mock_intr.response.reset_mock()
+    mock_member.add_roles.reset_mock()
+    with patch("apps.obx_tasks.bot.join_raid_views.session_scope", lambda: mock_session_scope_for(db_session)):
+        await handle_join_raid_click(mock_intr)
+
+    mock_member.add_roles.assert_not_called()
     kw3 = mock_intr.response.send_message.call_args[1]
-    assert kw3["embed"].title == "⚔️ YOU'RE IN"
+    assert kw3["embed"].title == "⚔️ OBX RAIDER ACTIVE"
     assert "@RaiderAlpha" in kw3["embed"].description
     labels3 = [b.label for b in kw3["view"].children if hasattr(b, "label")]
     assert "EDIT TWITTER" in labels3
-
-    # State 4: User already has role and has Twitter
-    mock_member.roles = [mock_role]
-    mock_intr.response.reset_mock()
-    with patch("apps.obx_tasks.bot.join_raid_views.session_scope", lambda: mock_session_scope_for(db_session)), \
-         patch("apps.obx_tasks.bot.join_raid_views.has_raider_role", return_value=True):
-        await handle_join_raid_click(mock_intr)
-
-    kw4 = mock_intr.response.send_message.call_args[1]
-    assert kw4["embed"].title == "⚔️ OBX RAIDER ACTIVE"
-    assert "@RaiderAlpha" in kw4["embed"].description
-    labels4 = [b.label for b in kw4["view"].children if hasattr(b, "label")]
-    assert "EDIT TWITTER" in labels4
-    assert "JOIN RAID" not in labels4
 
 
 @pytest.mark.asyncio

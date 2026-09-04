@@ -96,7 +96,7 @@ async def test_check_raider_access_prompts_unverified_member(db_session):
 
 
 @pytest.mark.asyncio
-async def test_handle_join_raid_click_without_twitter_prompts_twitter(db_session):
+async def test_handle_join_raid_click_assigns_role_even_without_twitter(db_session):
     mock_guild = MagicMock(spec=discord.Guild, id="1542965409383321660")
     mock_raider_role = MagicMock(spec=discord.Role, id=9988776655, name="⚡ OBX Raider")
     mock_guild.get_role.return_value = mock_raider_role
@@ -116,12 +116,15 @@ async def test_handle_join_raid_click_without_twitter_prompts_twitter(db_session
     with patch("apps.obx_tasks.bot.join_raid_views.session_scope", lambda: mock_session_scope_for(db_session)):
         await handle_join_raid_click(mock_interaction)
 
-    mock_member.add_roles.assert_not_called()
+    mock_member.add_roles.assert_called_once_with(
+        mock_raider_role,
+        reason="User joined the OBX Raid via onboarding flow",
+    )
     mock_interaction.response.send_message.assert_called_once()
     kwargs = mock_interaction.response.send_message.call_args[1]
     assert kwargs.get("ephemeral") is True
     embed = kwargs.get("embed")
-    assert "JOIN THE OBX RAID" in embed.title
+    assert "YOU'RE IN" in embed.title
     labels = [b.label for b in kwargs.get("view").children if hasattr(b, "label")]
     assert "Set X Account" in labels or "SET YOUR TWITTER" in labels
 
