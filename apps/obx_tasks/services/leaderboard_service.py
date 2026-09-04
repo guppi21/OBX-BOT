@@ -379,3 +379,50 @@ class LeaderboardService:
         if row:
             return int(row[0] or 0), int(row[1] or 0)
         return 0, 0
+
+    def clear_leaderboard_data(self) -> Dict[str, int]:
+        """Reset all raider balances, earnings, and submission history to produce a clean leaderboard."""
+        from packages.database.models.wallet import Wallet
+        from packages.database.models.ledger import LedgerEntry
+        from packages.database.models.submission import TaskSubmission
+        from packages.database.models.submission_audit_log import SubmissionAuditLog
+        from packages.database.models.auction import AuctionBid, AuctionClaim
+        from packages.database.models.task import Task
+
+        # 1. Reset all wallet balances to 0
+        wallets_updated = self.session.query(Wallet).update(
+            {"available_balance": 0, "locked_balance": 0},
+            synchronize_session=False,
+        )
+
+        # 2. Delete ledger transactions
+        ledger_deleted = self.session.query(LedgerEntry).delete(synchronize_session=False)
+
+        # 3. Delete submission audit logs and task submissions
+        sub_audits_deleted = self.session.query(SubmissionAuditLog).delete(synchronize_session=False)
+        subs_deleted = self.session.query(TaskSubmission).delete(synchronize_session=False)
+
+        # 4. Reset task distribution counters so tasks can be completed fresh
+        tasks_reset = self.session.query(Task).update(
+            {"distributed_reward": 0},
+            synchronize_session=False,
+        )
+
+        # 5. Delete auction bids & claims so no locked funds or winner records linger
+        claims_deleted = self.session.query(AuctionClaim).delete(synchronize_session=False)
+        bids_deleted = self.session.query(AuctionBid).delete(synchronize_session=False)
+
+        self.session.commit()
+        self.session.expire_all()
+        logger.info(
+            "Leaderboard data cleared: %d wallets reset, %d ledger entries, %d submissions, %d tasks reset",
+            wallets_updated, ledger_deleted, subs_deleted, tasks_reset,
+        )
+        return {
+            "wallets_reset": wallets_updated,
+            "submissions_cleared": subs_deleted,
+            "ledger_cleared": ledger_deleted,
+            "tasks_reset": tasks_reset,
+            "bids_cleared": bids_deleted,
+        }
+

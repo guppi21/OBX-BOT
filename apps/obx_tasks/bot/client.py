@@ -1079,6 +1079,48 @@ def create_discord_bot() -> OBXTaskBot:
             logger.error("Error posting leaderboard: %s", exc)
             await interaction.followup.send(f"❌ Error posting leaderboard: {str(exc)}", ephemeral=True)
 
+    @bot.tree.command(name="admin-clear-leaderboard", description="[Admin] Reset all raider balances, earnings, and submissions to clear the leaderboard")
+    async def admin_clear_leaderboard_command(interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            from apps.obx_tasks.services.leaderboard_service import LeaderboardService
+            from apps.obx_tasks.bot.announcement_service import deploy_or_update_leaderboard
+            from apps.obx_tasks.bot.ui_theme import COLOR_GREEN
+
+            with session_scope() as session:
+                service = LeaderboardService(session)
+                stats = service.clear_leaderboard_data()
+
+            refresh_msg = ""
+            if interaction.guild:
+                ok, msg = await deploy_or_update_leaderboard(interaction.guild, bot)
+                if ok:
+                    refresh_msg = f"\n\n📢 **Public Channel Updated**: {msg}"
+
+            embed = discord.Embed(
+                title="🗑️ OBX LEADERBOARD CLEARED & RESET",
+                description=(
+                    "All community balances and submission history have been successfully reset.\n"
+                    "The leaderboard is now completely empty and ready for fresh competition!\n\n"
+                    f"• **Wallets Reset**: `{stats['wallets_reset']}`\n"
+                    f"• **Submissions Cleared**: `{stats['submissions_cleared']}`\n"
+                    f"• **Task Counters Reset**: `{stats['tasks_reset']}`\n"
+                    f"• **Ledger Records Reset**: `{stats['ledger_cleared']}`\n"
+                    f"• **Active Standings**: Clean (`*No raiders ranked yet*`)"
+                    f"{refresh_msg}"
+                ),
+                color=COLOR_GREEN,
+            )
+            embed.set_footer(text="Administrative Reset • Double-Entry Ledger Synchronized")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as exc:
+            logger.error("Error clearing leaderboard: %s", exc)
+            await interaction.followup.send(f"❌ Error clearing leaderboard: {str(exc)}", ephemeral=True)
+
     @bot.tree.command(name="admin-post-dashboard", description="[Admin] Post or refresh the interactive OBX Task Center dashboard in this channel")
     async def admin_post_dashboard_command(interaction: discord.Interaction):
         if not is_admin(interaction):

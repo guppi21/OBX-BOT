@@ -583,7 +583,7 @@ def create_admin_hub_embed() -> discord.Embed:
     )
     embed.add_field(
         name="⚙️ Platform & Routing Operations",
-        value="• **🏗️ Configure Channels**: Reassign feature channels\n• **📊 Refresh Public Systems**: Update all public cards\n• **🩺 System Health**: Telemetry & database diagnostic",
+        value="• **🏗️ Configure Channels**: Reassign feature channels\n• **📊 Refresh Public Systems**: Update all public cards\n• **🩺 System Health**: Telemetry & database diagnostic\n• **🗑️ Reset Leaderboard**: Clear all raider balances & rankings",
         inline=False,
     )
     embed.set_footer(text="Strictly Restricted: Haveli Owner Admin Role Only • Authoritative Ledger")
@@ -679,6 +679,47 @@ class OBXAdminHubView(View):
             await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
             return
         await handle_admin_health(interaction)
+
+    @discord.ui.button(label="Reset Leaderboard", emoji="🗑️", style=discord.ButtonStyle.danger, custom_id="obx:admin:reset_lb", row=2)
+    async def reset_lb_btn(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            from apps.obx_tasks.services.leaderboard_service import LeaderboardService
+            from apps.obx_tasks.bot.announcement_service import deploy_or_update_leaderboard
+
+            with session_scope() as session:
+                service = LeaderboardService(session)
+                stats = service.clear_leaderboard_data()
+
+            refresh_msg = ""
+            if interaction.guild:
+                ok, msg = await deploy_or_update_leaderboard(interaction.guild, interaction.client)
+                if ok:
+                    refresh_msg = f"\n\n📢 **Public Channel Updated**: {msg}"
+
+            embed = discord.Embed(
+                title="🗑️ OBX LEADERBOARD CLEARED & RESET",
+                description=(
+                    "All community balances and submission history have been successfully reset.\n"
+                    "The leaderboard is now completely empty and ready for fresh competition!\n\n"
+                    f"• **Wallets Reset**: `{stats['wallets_reset']}`\n"
+                    f"• **Submissions Cleared**: `{stats['submissions_cleared']}`\n"
+                    f"• **Task Counters Reset**: `{stats['tasks_reset']}`\n"
+                    f"• **Ledger Records Reset**: `{stats['ledger_cleared']}`\n"
+                    f"• **Active Standings**: Clean (`*No raiders ranked yet*`)"
+                    f"{refresh_msg}"
+                ),
+                color=COLOR_GREEN,
+            )
+            embed.set_footer(text="Administrative Reset • Double-Entry Ledger Synchronized")
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as exc:
+            logger.error("Error resetting leaderboard from Admin Hub: %s", exc)
+            await interaction.followup.send(f"❌ Error resetting leaderboard: {exc}", ephemeral=True)
 
     @discord.ui.button(label="Refresh Hub", style=discord.ButtonStyle.secondary, custom_id="obx:admin:refresh_hub", row=2)
     async def refresh_hub_btn(self, interaction: discord.Interaction, button: Button):
