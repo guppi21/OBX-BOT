@@ -170,10 +170,17 @@ def build_auction_notification_embed(
         color=color,
     )
 
+    # Top-right thumbnail: Project's Twitter Profile Picture (Avatar)
+    avatar_url = getattr(auction, "preview_x_avatar_url", None)
+    if avatar_url and isinstance(avatar_url, str):
+        clean_avatar = avatar_url.strip()
+        if (clean_avatar.startswith("http://") or clean_avatar.startswith("https://")) and not any(ch in clean_avatar for ch in ["\r", "\n", " "]):
+            embed.set_thumbnail(url=clean_avatar)
+
     # Large Project Image selection using strict priority:
     # 1. X profile banner image
     # 2. Project/profile OpenGraph image
-    # 3. X profile avatar as a fallback
+    # 3. X profile avatar as a fallback (if no thumbnail set or no banner available)
     # 4. No image if none safely available
     selected_img = getattr(auction, "preview_image_url", None)
     if not selected_img:
@@ -181,7 +188,7 @@ def build_auction_notification_embed(
         selected_img = resolve_auction_preview_image(
             banner_url=getattr(auction, "preview_x_banner_url", None),
             og_image_url=getattr(auction, "image_url", None),
-            avatar_url=getattr(auction, "preview_x_avatar_url", None),
+            avatar_url=getattr(auction, "preview_x_avatar_url", None) if not embed.thumbnail else None,
         )
 
     # Validate image URL before rendering as the large main image of the embed
@@ -329,6 +336,12 @@ def build_auction_card_embed(
             f"**Your Position:** `#{u_rank}` • **Status:** {win_badge}"
         )
         embed.add_field(name="📍 YOUR BID STATUS", value=user_status_text, inline=False)
+
+    avatar_url = getattr(auction, "preview_x_avatar_url", None)
+    if avatar_url and isinstance(avatar_url, str):
+        clean_avatar = avatar_url.strip()
+        if (clean_avatar.startswith("http://") or clean_avatar.startswith("https://")) and not any(ch in clean_avatar for ch in ["\r", "\n", " "]):
+            embed.set_thumbnail(url=clean_avatar)
 
     embed.set_footer(text=f"Auction ID: {auction.id} • Multi-Winner Ranked Bidding • Double-Entry Protected")
     return embed

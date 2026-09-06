@@ -209,8 +209,9 @@ def test_x_banner_and_raw_url_hidden():
     assert "https://x.com/AstralSentinels" not in embed.description
     assert "https://x.com" not in embed.description
 
-    # 3. Large Project Banner is set as embed.image
+    # 3. Large Project Banner is set as embed.image, Twitter avatar is set as embed.thumbnail
     assert embed.image.url == "https://pbs.twimg.com/profile_banners/astral_banner.jpg"
+    assert embed.thumbnail.url == "https://pbs.twimg.com/profile_images/astral_avatar.png"
 
     # 4. Clean compact table
     assert "WINNERS" in embed.description

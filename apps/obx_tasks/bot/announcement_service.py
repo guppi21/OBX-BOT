@@ -1013,6 +1013,12 @@ async def announce_auction_winners(
             color=COLOR_GOLD,
         )
 
+        avatar_url = getattr(db_auc, "preview_x_avatar_url", None)
+        if avatar_url and isinstance(avatar_url, str):
+            clean_avatar = avatar_url.strip()
+            if (clean_avatar.startswith("http://") or clean_avatar.startswith("https://")) and not any(ch in clean_avatar for ch in ["\r", "\n", " "]):
+                embed.set_thumbnail(url=clean_avatar)
+
         if db_auc.preview_image_url:
             embed.set_image(url=db_auc.preview_image_url)
 
