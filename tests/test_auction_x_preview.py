@@ -389,3 +389,53 @@ async def test_auction_updates_do_not_reping_raid_role_id_and_no_duplicates(db_s
         assert edit_kwargs.get("allowed_mentions") is not None
         assert not edit_kwargs["allowed_mentions"].roles
         assert not edit_kwargs["allowed_mentions"].everyone
+
+
+def test_upgrade_twitter_avatar_url():
+    """Verify upgrade_twitter_avatar_url upgrades low-res Twitter avatars to 400x400 HD."""
+    from packages.shared.utils import upgrade_twitter_avatar_url
+
+    # Standard Twitter pbs image with _normal
+    url = "https://pbs.twimg.com/profile_images/2095622603767787520/XDIxx1Bw_normal.jpg"
+    assert upgrade_twitter_avatar_url(url) == "https://pbs.twimg.com/profile_images/2095622603767787520/XDIxx1Bw_400x400.jpg"
+
+    # With _mini or _bigger
+    assert upgrade_twitter_avatar_url("https://pbs.twimg.com/profile_images/1/test_mini.png") == "https://pbs.twimg.com/profile_images/1/test_400x400.png"
+    assert upgrade_twitter_avatar_url("https://pbs.twimg.com/profile_images/1/test_bigger.jpeg") == "https://pbs.twimg.com/profile_images/1/test_400x400.jpeg"
+
+    # Default avatar on abs.twimg.com
+    assert upgrade_twitter_avatar_url("https://abs.twimg.com/sticky/default_profile_images/default_profile_normal.png") == "https://abs.twimg.com/sticky/default_profile_images/default_profile_400x400.png"
+
+    # Already high-res or non-twitter
+    assert upgrade_twitter_avatar_url("https://pbs.twimg.com/profile_images/1/test_400x400.jpg") == "https://pbs.twimg.com/profile_images/1/test_400x400.jpg"
+    assert upgrade_twitter_avatar_url("https://cdn.custom.com/normal.png") == "https://cdn.custom.com/normal.png"
+    assert upgrade_twitter_avatar_url(None) is None
+    assert upgrade_twitter_avatar_url("") is None
+
+
+def test_embed_thumbnail_upgrades_normal_to_400x400():
+    """Verify build_auction_notification_embed dynamically upgrades _normal avatar URLs to 400x400 HD."""
+    from apps.obx_tasks.bot.auction_views import build_auction_notification_embed
+    from packages.shared.enums import AuctionStatus, AuctionType
+
+    auc = MagicMock()
+    auc.id = "test-auc-avatar"
+    auc.title = "TEST AUCTION"
+    auc.description = "Test description"
+    auc.auction_type = AuctionType.GTD
+    auc.status = AuctionStatus.ACTIVE
+    auc.ends_at = None
+    auc.total_slots = 1
+    auc.price_or_min_bid = 10
+    auc.reward_title = "WL"
+    auc.image_url = None
+    auc.preview_image_url = None
+    auc.preview_x_banner_url = None
+    auc.preview_x_handle = "@GUPPI_ETH"
+    auc.preview_x_display_name = "GUPPI"
+    auc.preview_x_avatar_url = "https://pbs.twimg.com/profile_images/2095622603767787520/XDIxx1Bw_normal.jpg"
+
+    embed = build_auction_notification_embed(auc)
+    # Thumbnail MUST be upgraded to _400x400 so it renders crystal-clear on Retina/HiDPI
+    assert embed.thumbnail.url == "https://pbs.twimg.com/profile_images/2095622603767787520/XDIxx1Bw_400x400.jpg"
+

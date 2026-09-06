@@ -14,6 +14,7 @@ from apps.obx_tasks.bot.ui_theme import (
     COLOR_GOLD, COLOR_PURPLE, COLOR_TEAL, COLOR_GREEN, COLOR_BLUE, COLOR_DARK, COLOR_ORANGE, COLOR_RED
 )
 from packages.shared.logging import get_logger
+from packages.shared.utils import upgrade_twitter_avatar_url
 
 logger = get_logger("obx.tasks.bot.auctions")
 
@@ -173,8 +174,8 @@ def build_auction_notification_embed(
     # Top-right thumbnail: Project's Twitter Profile Picture (Avatar)
     avatar_url = getattr(auction, "preview_x_avatar_url", None)
     if avatar_url and isinstance(avatar_url, str):
-        clean_avatar = avatar_url.strip()
-        if (clean_avatar.startswith("http://") or clean_avatar.startswith("https://")) and not any(ch in clean_avatar for ch in ["\r", "\n", " "]):
+        clean_avatar = upgrade_twitter_avatar_url(avatar_url.strip())
+        if clean_avatar and (clean_avatar.startswith("http://") or clean_avatar.startswith("https://")) and not any(ch in clean_avatar for ch in ["\r", "\n", " "]):
             embed.set_thumbnail(url=clean_avatar)
 
     # Large Project Image selection using strict priority:
@@ -339,8 +340,8 @@ def build_auction_card_embed(
 
     avatar_url = getattr(auction, "preview_x_avatar_url", None)
     if avatar_url and isinstance(avatar_url, str):
-        clean_avatar = avatar_url.strip()
-        if (clean_avatar.startswith("http://") or clean_avatar.startswith("https://")) and not any(ch in clean_avatar for ch in ["\r", "\n", " "]):
+        clean_avatar = upgrade_twitter_avatar_url(avatar_url.strip())
+        if clean_avatar and (clean_avatar.startswith("http://") or clean_avatar.startswith("https://")) and not any(ch in clean_avatar for ch in ["\r", "\n", " "]):
             embed.set_thumbnail(url=clean_avatar)
 
     embed.set_footer(text=f"Auction ID: {auction.id} • Multi-Winner Ranked Bidding • Double-Entry Protected")

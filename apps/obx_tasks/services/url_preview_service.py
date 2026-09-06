@@ -13,6 +13,7 @@ from html.parser import HTMLParser
 from typing import Optional, Tuple, Dict, Any, List
 
 from packages.shared.logging import get_logger
+from packages.shared.utils import upgrade_twitter_avatar_url
 
 logger = get_logger("obx.tasks.services.url_preview")
 
@@ -341,7 +342,8 @@ class UrlPreviewService:
                         disp_name = u_obj.get("name") or user_handle
                         raw_bio = u_obj.get("description")
                         bio = raw_bio.strip() if raw_bio and str(raw_bio).strip() else None
-                        avatar = u_obj.get("avatar_url")
+                        raw_avatar = u_obj.get("avatar_url")
+                        avatar = upgrade_twitter_avatar_url(raw_avatar) if raw_avatar else None
                         banner = u_obj.get("banner_url")
                         img = banner or avatar
                         logger.info(

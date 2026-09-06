@@ -12,6 +12,7 @@ from apps.obx_core.services.wallet_service import WalletService
 from packages.shared.enums import AuctionType, AuctionStatus, ReferenceType
 from packages.shared.exceptions import TaskError, OBXError
 from packages.shared.logging import get_logger
+from packages.shared.utils import upgrade_twitter_avatar_url
 
 logger = get_logger("obx.tasks.auction")
 
@@ -107,7 +108,7 @@ class AuctionService:
             image_url=image_url.strip() if image_url else None,
             preview_x_handle=preview_x_handle.strip() if preview_x_handle else None,
             preview_x_display_name=preview_x_display_name.strip() if preview_x_display_name else None,
-            preview_x_avatar_url=preview_x_avatar_url.strip() if preview_x_avatar_url else None,
+            preview_x_avatar_url=upgrade_twitter_avatar_url(preview_x_avatar_url.strip()) if preview_x_avatar_url else None,
             preview_x_banner_url=preview_x_banner_url.strip() if preview_x_banner_url else None,
             preview_x_bio=preview_x_bio.strip() if preview_x_bio else None,
             created_by=created_by,
@@ -281,7 +282,8 @@ class AuctionService:
         if display_name is not None:
             auction.preview_x_display_name = display_name.strip() if (display_name and display_name.strip()) else None
         if avatar_url is not None:
-            auction.preview_x_avatar_url = avatar_url.strip() if (avatar_url and avatar_url.strip()) else None
+            upgraded_avatar = upgrade_twitter_avatar_url(avatar_url.strip()) if avatar_url.strip() else None
+            auction.preview_x_avatar_url = upgraded_avatar
         if banner_url is not None:
             auction.preview_x_banner_url = banner_url.strip() if (banner_url and banner_url.strip()) else None
         if bio is not None:

@@ -6,6 +6,7 @@ from sqlalchemy import func, select
 
 from packages.database.models.raider_profile import RaiderProfile
 from packages.shared.logging import get_logger
+from packages.shared.utils import upgrade_twitter_avatar_url
 
 logger = get_logger("obx.tasks.raider_service")
 
@@ -132,17 +133,18 @@ class RaiderService:
             .first()
         )
 
+        upgraded_avatar = upgrade_twitter_avatar_url(avatar_url) if avatar_url else None
         if profile:
             profile.twitter_handle = handle
             profile.twitter_profile_url = profile_url
-            if avatar_url:
-                profile.twitter_avatar_url = avatar_url
+            if upgraded_avatar:
+                profile.twitter_avatar_url = upgraded_avatar
         else:
             profile = RaiderProfile(
                 discord_user_id=str(discord_user_id),
                 twitter_handle=handle,
                 twitter_profile_url=profile_url,
-                twitter_avatar_url=avatar_url,
+                twitter_avatar_url=upgraded_avatar,
             )
             self.session.add(profile)
 

@@ -24,6 +24,7 @@ from apps.obx_tasks.bot.ui_theme import (
 )
 from packages.shared.config import get_settings
 from packages.shared.logging import get_logger
+from packages.shared.utils import upgrade_twitter_avatar_url
 
 logger = get_logger("obx.tasks.bot.announcements")
 
@@ -1015,8 +1016,8 @@ async def announce_auction_winners(
 
         avatar_url = getattr(db_auc, "preview_x_avatar_url", None)
         if avatar_url and isinstance(avatar_url, str):
-            clean_avatar = avatar_url.strip()
-            if (clean_avatar.startswith("http://") or clean_avatar.startswith("https://")) and not any(ch in clean_avatar for ch in ["\r", "\n", " "]):
+            clean_avatar = upgrade_twitter_avatar_url(avatar_url.strip())
+            if clean_avatar and (clean_avatar.startswith("http://") or clean_avatar.startswith("https://")) and not any(ch in clean_avatar for ch in ["\r", "\n", " "]):
                 embed.set_thumbnail(url=clean_avatar)
 
         if db_auc.preview_image_url:

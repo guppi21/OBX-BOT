@@ -46,3 +46,20 @@ def parse_duration_or_datetime(val: Optional[str]) -> Optional[datetime]:
             pass
 
     raise ValueError(f"Could not parse duration/deadline '{val}'. Valid examples: '2h', '24h', '3d', '2026-09-10 18:00', or leave blank.")
+
+
+def upgrade_twitter_avatar_url(url: Optional[str]) -> Optional[str]:
+    """Upgrade Twitter/X profile avatar URLs from low-res thumbnails (_normal: 48x48, _mini: 24x24)
+    to high-resolution 400x400 HD avatars (_400x400).
+
+    This prevents blurry/pixelated thumbnails on Discord embeds, especially on Retina/HiDPI screens.
+    """
+    if not url or not isinstance(url, str):
+        return None
+    cleaned = url.strip()
+    if not cleaned:
+        return None
+    # Twitter profile images on pbs.twimg.com or abs.twimg.com end with _normal.[ext], _mini.[ext], or _bigger.[ext]
+    if "twimg.com" in cleaned or "profile_images" in cleaned:
+        cleaned = re.sub(r"_(normal|mini|bigger)\.([a-zA-Z0-9]+)$", r"_400x400.\2", cleaned)
+    return cleaned
