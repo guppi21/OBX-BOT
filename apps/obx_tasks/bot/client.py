@@ -1,6 +1,7 @@
 import uuid
 import time
 import asyncio
+import inspect
 import traceback
 import discord
 from discord import app_commands
@@ -548,6 +549,17 @@ class OBXTaskBot(commands.Bot):
                     "Please invite the bot to the server using the OAuth2 URL.",
                     settings.DISCORD_GUILD_ID,
                 )
+
+        # Auto-ensure bot global username is 'OBX'
+        if self.user and self.user.name != "OBX":
+            try:
+                if hasattr(self.user, "edit"):
+                    edit_res = self.user.edit(username="OBX")
+                    if inspect.isawaitable(edit_res):
+                        await edit_res
+                    logger.info("Auto-set bot global username to 'OBX'")
+            except Exception as name_err:
+                logger.debug("Could not auto-rename global bot username via API: %s", name_err)
 
         # Auto-ensure bot nickname in all joined servers is 'OBX'
         for g in self.guilds:
