@@ -211,10 +211,9 @@ class AdminAuctionBrowserView(View):
         if not is_admin(interaction):
             await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
             return
-        from apps.obx_tasks.bot.dashboard_views import OBXAdminHubView
-        from apps.obx_tasks.bot.dashboard_views import build_admin_hub_embed
+        from apps.obx_tasks.bot.dashboard_views import OBXAdminHubView, create_admin_hub_embed
         view = OBXAdminHubView()
-        embed = build_admin_hub_embed()
+        embed = create_admin_hub_embed()
         await safe_edit_interaction(interaction, embed=embed, view=view)
 
 
@@ -285,7 +284,10 @@ class AdminAuctionDetailView(View):
             return
 
         if not _is_response_done(interaction):
-            await interaction.response.defer(ephemeral=True)
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
 
         try:
             with session_scope() as session:
@@ -351,7 +353,10 @@ class AdminAuctionDetailView(View):
             return
 
         if not _is_response_done(interaction):
-            await interaction.response.defer(ephemeral=True)
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
 
         try:
             with session_scope() as session:
@@ -370,9 +375,13 @@ class AdminAuctionDetailView(View):
     @discord.ui.button(label="⬅️ Back to Auctions", style=discord.ButtonStyle.secondary, row=1)
     async def back_btn(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction):
-            await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+            if not _is_response_done(interaction):
+                try:
+                    await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+                except Exception:
+                    pass
             return
-        await handle_admin_manage_auctions(interaction)
+        await render_auction_browser(interaction, status_filter="ACTIVE")
 
 
 class AdminCancelAuctionConfirmView(View):
@@ -388,7 +397,10 @@ class AdminCancelAuctionConfirmView(View):
             return
 
         if not _is_response_done(interaction):
-            await interaction.response.defer(ephemeral=True)
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
 
         try:
             with session_scope() as session:
@@ -433,7 +445,7 @@ class AdminCancelAuctionConfirmView(View):
             back_btn = Button(label="⬅️ Return to Auctions", style=discord.ButtonStyle.secondary)
 
             async def back_callback(b_inter: discord.Interaction):
-                await handle_admin_manage_auctions(b_inter)
+                await render_auction_browser(b_inter, status_filter="ACTIVE")
 
             back_btn.callback = back_callback
             back_view.add_item(back_btn)
@@ -446,7 +458,11 @@ class AdminCancelAuctionConfirmView(View):
     @discord.ui.button(label="❌ Keep Auction (Back)", style=discord.ButtonStyle.secondary, row=0)
     async def cancel_back_btn(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction):
-            await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+            if not _is_response_done(interaction):
+                try:
+                    await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+                except Exception:
+                    pass
             return
         await show_auction_detail(interaction, self.auction_id)
 
@@ -480,8 +496,8 @@ async def show_auction_detail(interaction: discord.Interaction, auction_id: str)
         await safe_edit_interaction(interaction, content=f"❌ Error loading auction details: {str(exc)}", embed=None, view=None)
 
 
-async def filter_auctions(interaction: discord.Interaction, status_filter: Optional[str]):
-    """Filters auctions by status and updates the browser view."""
+async def render_auction_browser(interaction: discord.Interaction, status_filter: Optional[str] = "ACTIVE"):
+    """Renders or updates the Auction Browser list view in place."""
     try:
         with session_scope() as session:
             query = session.query(Auction).order_by(Auction.created_at.desc())
@@ -497,35 +513,34 @@ async def filter_auctions(interaction: discord.Interaction, status_filter: Optio
         view = AdminAuctionBrowserView(auctions, current_filter=status_filter)
         await safe_edit_interaction(interaction, embed=embed, view=view)
     except Exception as exc:
-        logger.error("Error filtering auctions: %s", exc)
-        await safe_edit_interaction(interaction, content=f"❌ Error filtering auctions: {str(exc)}", embed=None, view=None)
+        logger.error("Error in render_auction_browser: %s", exc)
+        await safe_edit_interaction(interaction, content=f"❌ Error loading auctions: {str(exc)}", embed=None, view=None)
+
+
+async def filter_auctions(interaction: discord.Interaction, status_filter: Optional[str]):
+    """Filters auctions by status and updates the browser view."""
+    await render_auction_browser(interaction, status_filter=status_filter)
 
 
 async def handle_admin_manage_auctions(interaction: discord.Interaction):
     """Main entry point for managing auctions from Admin Hub."""
     if not is_admin(interaction):
         if not _is_response_done(interaction):
-            await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+            try:
+                await interaction.response.send_message("❌ Administrator permission required.", ephemeral=True)
+            except Exception:
+                pass
         else:
-            await interaction.followup.send("❌ Administrator permission required.", ephemeral=True)
+            try:
+                await interaction.followup.send("❌ Administrator permission required.", ephemeral=True)
+            except Exception:
+                pass
         return
 
     if not _is_response_done(interaction):
-        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
 
-    try:
-        with session_scope() as session:
-            auctions = (
-                session.query(Auction)
-                .filter(Auction.status == AuctionStatus.ACTIVE)
-                .order_by(Auction.created_at.desc())
-                .limit(25)
-                .all()
-            )
-
-        embed = build_auction_browser_embed(auctions, status_filter="ACTIVE")
-        view = AdminAuctionBrowserView(auctions, current_filter="ACTIVE")
-        await safe_edit_interaction(interaction, embed=embed, view=view)
-    except Exception as exc:
-        logger.error("Error in handle_admin_manage_auctions: %s", exc)
-        await safe_edit_interaction(interaction, content=f"❌ Error loading auctions: {str(exc)}", embed=None, view=None)
+    await render_auction_browser(interaction, status_filter="ACTIVE")

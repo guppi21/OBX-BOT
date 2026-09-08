@@ -590,6 +590,9 @@ def create_admin_hub_embed() -> discord.Embed:
     return embed
 
 
+build_admin_hub_embed = create_admin_hub_embed
+
+
 class OBXAdminHubView(View):
     """Persistent Administrator Hub View deployed exclusively in the private admin operations channel."""
     def __init__(self):

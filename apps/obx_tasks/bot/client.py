@@ -234,13 +234,21 @@ class OBXTaskBot(commands.Bot):
                 return
             # Admin task management interactions
             elif custom_id == "obx:admin:manage_tasks":
+                if _is_response_done(interaction):
+                    return
                 from apps.obx_tasks.bot.task_management_views import handle_admin_manage_tasks
                 await handle_admin_manage_tasks(interaction)
                 return
             elif custom_id == "obx:admin:manage_auctions":
+                if _is_response_done(interaction):
+                    return
                 from apps.obx_tasks.bot.permissions import is_admin
                 if not is_admin(interaction):
-                    await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+                    if not _is_response_done(interaction):
+                        try:
+                            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+                        except Exception:
+                            pass
                     return
                 from apps.obx_tasks.bot.auction_management_views import handle_admin_manage_auctions
                 await handle_admin_manage_auctions(interaction)

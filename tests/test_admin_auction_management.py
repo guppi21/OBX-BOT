@@ -296,3 +296,69 @@ async def test_raider_outbid_rankings_shows_withdraw_button_and_withdrawing_refu
     withdraw_embed = inter_withdraw.followup.send.call_args[1]["embed"]
     assert "Refunded Successfully" in withdraw_embed.title
 
+
+@pytest.mark.asyncio
+async def test_admin_auction_browser_back_to_admin_hub():
+    """Verify that clicking Back to Admin Hub returns the Admin Hub view and embed."""
+    from apps.obx_tasks.bot.auction_management_views import AdminAuctionBrowserView
+    from apps.obx_tasks.bot.dashboard_views import OBXAdminHubView
+
+    view = AdminAuctionBrowserView(auctions=[])
+    mock_interaction = make_mock_interaction(is_done=False)
+
+    with patch("apps.obx_tasks.bot.auction_management_views.is_admin", return_value=True):
+        await view.btn_back_hub.callback(mock_interaction)
+
+    assert mock_interaction.response.edit_message.called
+    call_kwargs = mock_interaction.response.edit_message.call_args[1]
+    assert isinstance(call_kwargs["view"], OBXAdminHubView)
+    assert "ADMINISTRATIVE CONTROL CENTER" in call_kwargs["embed"].title
+
+
+@pytest.mark.asyncio
+async def test_admin_auction_detail_back_to_auctions(db_session):
+    """Verify that clicking Back to Auctions returns to the browser without a duplicate defer."""
+    from apps.obx_tasks.bot.auction_management_views import AdminAuctionDetailView, AdminAuctionBrowserView
+
+    view = AdminAuctionDetailView(auction_id=str(uuid.uuid4()))
+    mock_interaction = make_mock_interaction(is_done=False)
+
+    with patch("apps.obx_tasks.bot.auction_management_views.session_scope", lambda: mock_session_scope_for(db_session)):
+        with patch("apps.obx_tasks.bot.auction_management_views.is_admin", return_value=True):
+            await view.back_btn.callback(mock_interaction)
+
+    # Must NOT call defer again when navigating back on an existing ephemeral message
+    mock_interaction.response.defer.assert_not_called()
+    assert mock_interaction.response.edit_message.called
+    call_kwargs = mock_interaction.response.edit_message.call_args[1]
+    assert isinstance(call_kwargs["view"], AdminAuctionBrowserView)
+
+
+@pytest.mark.asyncio
+async def test_handle_admin_manage_auctions_already_acknowledged(db_session):
+    """Verify that handle_admin_manage_auctions does not fail if interaction is already acknowledged."""
+    mock_interaction = make_mock_interaction(is_done=True)
+
+    with patch("apps.obx_tasks.bot.auction_management_views.session_scope", lambda: mock_session_scope_for(db_session)):
+        with patch("apps.obx_tasks.bot.auction_management_views.is_admin", return_value=True):
+            await handle_admin_manage_auctions(mock_interaction)
+
+    # Defer should NOT have been called because is_done was already True
+    mock_interaction.response.defer.assert_not_called()
+    assert mock_interaction.edit_original_response.called
+
+
+@pytest.mark.asyncio
+async def test_client_on_interaction_skips_when_already_done():
+    """Verify client.on_interaction returns early if interaction was already acknowledged."""
+    from apps.obx_tasks.bot.client import OBXTaskBot
+
+    bot = MagicMock(spec=OBXTaskBot)
+    mock_interaction = make_mock_interaction(is_done=True)
+    mock_interaction.data = {"custom_id": "obx:admin:manage_auctions"}
+
+    with patch("apps.obx_tasks.bot.auction_management_views.handle_admin_manage_auctions") as mock_handle:
+        await OBXTaskBot.on_interaction(bot, mock_interaction)
+        mock_handle.assert_not_called()
+
+
