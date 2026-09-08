@@ -1128,6 +1128,12 @@ class AdminReviewQueueView(View):
             await interaction.response.edit_message(embed=self.get_current_embed(), view=self)
             return
 
+        if self.current_index >= len(self.submissions):
+            self.current_index = max(0, len(self.submissions) - 1)
+
+        self.last_message = interaction.message
+        self.last_interaction = interaction
+
         sub = self.submissions[self.current_index]
         modal = AdminQueueRejectModal(queue_view=self, submission_id=str(sub.id), submitter_id=str(sub.discord_user_id))
         await interaction.response.send_modal(modal)
@@ -1238,29 +1244,38 @@ class AdminQueueRejectModal(Modal, title="❌ REJECT SUBMISSION"):
         self.add_item(self.reason)
 
     async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
+        clean_reason = self.reason.value.strip() if (self.reason.value and self.reason.value.strip()) else "Proof did not meet task requirements."
+        media_deleted = False
+
         try:
             with session_scope() as session:
                 service = TaskService(session)
-                sub = service.reject_submission(
-                    submission_id=self.submission_id,
-                    reviewer_discord_id=str(interaction.user.id),
-                    rejection_reason=self.reason.value,
-                )
+                try:
+                    sub = service.reject_submission(
+                        submission_id=self.submission_id,
+                        reviewer_discord_id=str(interaction.user.id),
+                        rejection_reason=clean_reason,
+                    )
+                    media_deleted = bool(getattr(sub, "proof_media_deleted", False))
+                except InvalidSubmissionStatusError as status_err:
+                    logger.info("Submission %s already processed (%s), advancing queue", self.submission_id, status_err)
 
             # Send private operational log to #obx-admin-logs
-            from apps.obx_tasks.bot.announcement_service import send_admin_log_event
-            if interaction.guild:
-                await send_admin_log_event(
-                    guild=interaction.guild,
-                    title="❌ [SUBMISSION REJECTED]",
-                    description=(
-                        f"<@{interaction.user.id}> rejected submission for <@{self.submitter_id}>.\n"
-                        f"**Reason:** *{self.reason.value.strip()}*\n"
-                        f"**Proof Media Deleted:** `{'Yes (Retention Policy)' if sub.proof_media_deleted else 'Retained'}`"
-                    ),
-                    color=COLOR_RED,
-                )
+            try:
+                from apps.obx_tasks.bot.announcement_service import send_admin_log_event
+                if interaction.guild:
+                    await send_admin_log_event(
+                        guild=interaction.guild,
+                        title="❌ [SUBMISSION REJECTED]",
+                        description=(
+                            f"<@{interaction.user.id}> rejected submission for <@{self.submitter_id}>.\n"
+                            f"**Reason:** *{clean_reason}*\n"
+                            f"**Proof Media Deleted:** `{'Yes (Retention Policy)' if media_deleted else 'Retained'}`"
+                        ),
+                        color=COLOR_RED,
+                    )
+            except Exception as log_err:
+                logger.warning("Could not send admin log event for rejection: %s", log_err)
 
             # Remove from queue view and advance
             self.queue_view.submissions = [s for s in self.queue_view.submissions if str(s.id) != self.submission_id]
@@ -1268,12 +1283,50 @@ class AdminQueueRejectModal(Modal, title="❌ REJECT SUBMISSION"):
                 self.queue_view.current_index = max(0, len(self.queue_view.submissions) - 1)
             self.queue_view.update_buttons()
 
-            if interaction.message:
-                await interaction.message.edit(embed=self.queue_view.get_current_embed(), view=self.queue_view)
-            await interaction.followup.send(f"❌ Submission `{self.submission_id}` rejected.", ephemeral=True)
+            new_embed = self.queue_view.get_current_embed()
+
+            # In-place edit of the review queue message
+            updated = False
+            if not _is_response_done(interaction):
+                try:
+                    await interaction.response.edit_message(embed=new_embed, view=self.queue_view)
+                    updated = True
+                except Exception as edit_exc:
+                    logger.debug("Modal interaction.response.edit_message failed: %s", edit_exc)
+
+            if not updated:
+                msg = getattr(self.queue_view, "last_message", None) or interaction.message
+                if msg:
+                    try:
+                        await msg.edit(embed=new_embed, view=self.queue_view)
+                        updated = True
+                    except Exception as msg_exc:
+                        logger.debug("Parent message.edit failed: %s", msg_exc)
+
+            if not updated:
+                last_inter = getattr(self.queue_view, "last_interaction", None)
+                if last_inter:
+                    try:
+                        await last_inter.edit_original_response(embed=new_embed, view=self.queue_view)
+                        updated = True
+                    except Exception as inter_exc:
+                        logger.debug("Parent last_interaction.edit_original_response failed: %s", inter_exc)
+
+            # Send ephemeral confirmation if interaction was not already closed
+            if not _is_response_done(interaction):
+                await interaction.response.send_message(f"❌ Submission `{self.submission_id}` rejected.", ephemeral=True)
+            else:
+                try:
+                    await interaction.followup.send(f"❌ Submission `{self.submission_id}` rejected.", ephemeral=True)
+                except Exception:
+                    pass
+
         except Exception as exc:
             logger.error("Error in AdminQueueRejectModal: %s", exc)
-            await interaction.followup.send(f"❌ Rejection failed: {str(exc)}", ephemeral=True)
+            if not _is_response_done(interaction):
+                await interaction.response.send_message(f"❌ Rejection failed: {str(exc)}", ephemeral=True)
+            else:
+                await interaction.followup.send(f"❌ Rejection failed: {str(exc)}", ephemeral=True)
 
 
 async def handle_admin_review(interaction: discord.Interaction):

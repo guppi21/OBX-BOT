@@ -129,15 +129,20 @@ class RejectReasonModal(Modal, title="❌ REJECT SUBMISSION"):
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True)
-        sub = None
+        sub_user_id = None
+        rejection_reason = self.reason.value.strip() if (self.reason.value and self.reason.value.strip()) else "Proof did not meet task requirements."
         try:
             with session_scope() as session:
                 service = TaskService(session)
-                sub = service.reject_submission(
-                    submission_id=self.submission_id,
-                    reviewer_discord_id=str(interaction.user.id),
-                    rejection_reason=self.reason.value,
-                )
+                try:
+                    sub = service.reject_submission(
+                        submission_id=self.submission_id,
+                        reviewer_discord_id=str(interaction.user.id),
+                        rejection_reason=rejection_reason,
+                    )
+                    sub_user_id = str(sub.discord_user_id)
+                except InvalidSubmissionStatusError:
+                    pass
         except TaskError as exc:
             await interaction.followup.send(f"❌ {exc.message}", ephemeral=True)
             return
@@ -158,8 +163,8 @@ class RejectReasonModal(Modal, title="❌ REJECT SUBMISSION"):
         embed = discord.Embed(
             title="❌ Submission Rejected",
             description=(
-                f"Submission for <@{sub.discord_user_id}> was rejected.\n"
-                f"**Reason:** *{sub.rejection_reason}*"
+                f"Submission for <@{sub_user_id or self.submission_id}> was rejected.\n"
+                f"**Reason:** *{rejection_reason}*"
             ),
             color=COLOR_RED,
         )

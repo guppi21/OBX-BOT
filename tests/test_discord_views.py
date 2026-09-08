@@ -223,3 +223,125 @@ async def test_task_review_rejection_flow(db_session):
     for item in view.children:
         assert item.disabled is True
     mock_message.edit.assert_awaited_once_with(view=view)
+
+
+@pytest.mark.asyncio
+async def test_admin_queue_reject_modal_success_and_advances_queue(db_session):
+    """Verify that AdminQueueRejectModal rejects submission and updates review queue card in place."""
+    from apps.obx_tasks.bot.dashboard_views import AdminReviewQueueView, AdminQueueRejectModal
+
+    service = TaskService(db_session)
+    task = service.create_task(
+        title="Queue Reject Task",
+        description="Testing AdminQueueRejectModal",
+        task_type="LIKE",
+        target_url="https://x.com/test_queue",
+        reward_per_user=15,
+        total_reward_pool=150,
+        created_by="admin_test",
+    )
+    sub1 = service.submit_task(
+        task_id=str(task.id),
+        discord_user_id="submitter_111",
+        x_username="user1",
+        proof_url="https://x.com/user1/1",
+        proof_text="Done 1",
+    )
+    sub2 = service.submit_task(
+        task_id=str(task.id),
+        discord_user_id="submitter_222",
+        x_username="user2",
+        proof_url="https://x.com/user2/2",
+        proof_text="Done 2",
+    )
+    db_session.commit()
+
+    subs, _ = service.list_submissions(status=SubmissionStatus.PENDING)
+    queue_view = AdminReviewQueueView(submissions=subs, current_index=0)
+    assert len(queue_view.submissions) == 2
+
+    modal = AdminQueueRejectModal(
+        queue_view=queue_view,
+        submission_id=str(sub1.id),
+        submitter_id=str(sub1.discord_user_id),
+    )
+    modal.reason._value = "Invalid screenshot"
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.response.is_done.return_value = False
+    mock_interaction.followup = AsyncMock()
+    mock_interaction.user = MagicMock(spec=discord.Member, id=999999)
+    mock_interaction.guild = MagicMock(spec=discord.Guild, id=1001)
+
+    with patch("apps.obx_tasks.bot.dashboard_views.session_scope", lambda: mock_session_scope_for(db_session)), \
+         patch("apps.obx_tasks.bot.announcement_service.send_admin_log_event", AsyncMock()):
+        await modal.on_submit(mock_interaction)
+
+    # Verify DB state
+    db_session.refresh(sub1)
+    assert sub1.status == SubmissionStatus.REJECTED
+    assert sub1.rejection_reason == "Invalid screenshot"
+
+    # Verify queue advanced
+    assert len(queue_view.submissions) == 1
+    assert str(queue_view.submissions[0].id) == str(sub2.id)
+
+    # Verify message was edited in place
+    mock_interaction.response.edit_message.assert_awaited_once()
+    call_kwargs = mock_interaction.response.edit_message.call_args[1]
+    assert "embed" in call_kwargs
+    assert "user2" in call_kwargs["embed"].fields[0].value
+
+
+@pytest.mark.asyncio
+async def test_admin_queue_reject_modal_last_submission_shows_caught_up(db_session):
+    """When the last submission in queue is rejected, it displays the caught-up embed."""
+    from apps.obx_tasks.bot.dashboard_views import AdminReviewQueueView, AdminQueueRejectModal
+
+    service = TaskService(db_session)
+    task = service.create_task(
+        title="Last Queue Reject Task",
+        description="Testing last reject",
+        task_type="LIKE",
+        target_url="https://x.com/last_queue",
+        reward_per_user=10,
+        total_reward_pool=100,
+        created_by="admin_test",
+    )
+    sub = service.submit_task(
+        task_id=str(task.id),
+        discord_user_id="submitter_single",
+        x_username="user_single",
+        proof_url="https://x.com/single/1",
+        proof_text="Done single",
+    )
+    db_session.commit()
+
+    subs, _ = service.list_submissions(status=SubmissionStatus.PENDING)
+    queue_view = AdminReviewQueueView(submissions=subs, current_index=0)
+    assert len(queue_view.submissions) == 1
+
+    modal = AdminQueueRejectModal(
+        queue_view=queue_view,
+        submission_id=str(sub.id),
+        submitter_id=str(sub.discord_user_id),
+    )
+    modal.reason._value = "Fake post"
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.response = AsyncMock()
+    mock_interaction.response.is_done.return_value = False
+    mock_interaction.followup = AsyncMock()
+    mock_interaction.user = MagicMock(spec=discord.Member, id=999999)
+    mock_interaction.guild = MagicMock(spec=discord.Guild, id=1001)
+
+    with patch("apps.obx_tasks.bot.dashboard_views.session_scope", lambda: mock_session_scope_for(db_session)), \
+         patch("apps.obx_tasks.bot.announcement_service.send_admin_log_event", AsyncMock()):
+        await modal.on_submit(mock_interaction)
+
+    assert len(queue_view.submissions) == 0
+    mock_interaction.response.edit_message.assert_awaited_once()
+    call_kwargs = mock_interaction.response.edit_message.call_args[1]
+    assert "Review Queue Caught Up!" in call_kwargs["embed"].title
+
