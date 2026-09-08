@@ -610,3 +610,76 @@ async def test_auction_type_immutability_and_button_derivation(db_session):
     refreshed_fcfs = auc_service.get_auction(fcfs_auc.id)
     assert refreshed_gtd.auction_type == AuctionType.GTD
     assert refreshed_fcfs.auction_type == AuctionType.FCFS
+
+
+@pytest.mark.asyncio
+async def test_my_bid_displays_bid_and_refund_status(db_session):
+    from apps.obx_tasks.bot.auction_views import handle_view_my_auction_position
+    from apps.obx_tasks.bot.client import OBXTaskBot
+
+    auc_service = AuctionService(db_session)
+    ws = WalletService(db_session)
+    ws.get_or_create_user("user_win")
+    ws.credit("user_win", 500, "test", "w_init")
+    ws.get_or_create_user("user_refunded")
+    ws.credit("user_refunded", 500, "test", "r_init")
+
+    auc = auc_service.create_auction(
+        title="Refund Display Test Auction",
+        description="Test description",
+        reward_title="Whitelist Spot",
+        total_slots=1,
+        price_or_min_bid=50,
+        created_by="admin",
+        auction_type=AuctionType.GTD,
+    )
+
+    # user_refunded bids 60
+    auc_service.place_or_update_gtd_bid(auc.id, "user_refunded", 60)
+    # user_win bids 100 -> displaces user_refunded, user_refunded gets auto refunded!
+    auc_service.place_or_update_gtd_bid(auc.id, "user_win", 100)
+
+    # 1. user_win clicks MY BID
+    inter_win = MagicMock(spec=discord.Interaction)
+    inter_win.user = MagicMock(id="user_win")
+    inter_win.response = MagicMock(is_done=MagicMock(return_value=False), defer=AsyncMock())
+    inter_win.followup = MagicMock(send=AsyncMock())
+
+    with patch("apps.obx_tasks.bot.permissions.check_raider_access", AsyncMock(return_value=True)):
+        await handle_view_my_auction_position(inter_win, str(auc.id), session_scope_fn=lambda: mock_session_scope_for(db_session))
+
+    assert inter_win.followup.send.called
+    emb_win = inter_win.followup.send.call_args[1]["embed"]
+    win_standing = [f.value for f in emb_win.fields if f.name == "📍 Your Standing"][0]
+    assert "100 OBX" in win_standing
+    assert "Winning Position" in win_standing
+
+    # 2. user_refunded clicks MY BID -> should show previous bid and "Bid Refunded to Wallet"
+    inter_ref = MagicMock(spec=discord.Interaction)
+    inter_ref.user = MagicMock(id="user_refunded")
+    inter_ref.response = MagicMock(is_done=MagicMock(return_value=False), defer=AsyncMock())
+    inter_ref.followup = MagicMock(send=AsyncMock())
+
+    with patch("apps.obx_tasks.bot.permissions.check_raider_access", AsyncMock(return_value=True)):
+        await handle_view_my_auction_position(inter_ref, str(auc.id), session_scope_fn=lambda: mock_session_scope_for(db_session))
+
+    assert inter_ref.followup.send.called
+    emb_ref = inter_ref.followup.send.call_args[1]["embed"]
+    ref_standing = [f.value for f in emb_ref.fields if f.name == "📍 Your Standing"][0]
+    assert "60 OBX" in ref_standing
+    assert "Bid Refunded to Wallet" in ref_standing or "Bid Refunded" in ref_standing
+
+    # 3. user_new clicks MY BID (no bid placed yet)
+    inter_new = MagicMock(spec=discord.Interaction)
+    inter_new.user = MagicMock(id="user_never_bid")
+    inter_new.response = MagicMock(is_done=MagicMock(return_value=False), defer=AsyncMock())
+    inter_new.followup = MagicMock(send=AsyncMock())
+
+    with patch("apps.obx_tasks.bot.permissions.check_raider_access", AsyncMock(return_value=True)):
+        await handle_view_my_auction_position(inter_new, str(auc.id), session_scope_fn=lambda: mock_session_scope_for(db_session))
+
+    assert inter_new.followup.send.called
+    emb_new = inter_new.followup.send.call_args[1]["embed"]
+    new_standing = [f.value for f in emb_new.fields if f.name == "📍 Your Standing"][0]
+    assert "No Bid Placed Yet" in new_standing
+

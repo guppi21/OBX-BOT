@@ -484,52 +484,8 @@ class AuctionBrowserView(View):
     async def btn_rankings(self, interaction: discord.Interaction, button: Button):
         if not self.auctions:
             return
-        # Immediate deferral before database query
-        await interaction.response.defer(ephemeral=True)
         auction = self.auctions[self.current_index]
-        try:
-            with session_scope() as session:
-                service = AuctionService(session)
-                standings = service.get_auction_standings(auction.id, discord_user_id=str(interaction.user.id))
-
-            embed = discord.Embed(
-                title=f"📊 Live Bid Rankings — {auction.title}",
-                description=f"**Reward:** {auction.reward_title} • **Available Slots:** `{auction.total_slots}`\nTop {auction.total_slots} unique bidders win whitelist spots at auction close.\n",
-                color=COLOR_GOLD,
-            )
-
-            bids = standings["ranked_bids"]
-            if not bids:
-                embed.add_field(name="No Bids Placed Yet", value="Be the first to place a bid and secure the #1 spot!", inline=False)
-            else:
-                rank_lines = []
-                for idx, b in enumerate(bids[:15], start=1):
-                    medal = MEDALS.get(idx, f"`#{idx}`")
-                    win_icon = "🟢" if idx <= auction.total_slots else "🔴"
-                    rank_lines.append(f"{medal} {win_icon} <@{b.discord_user_id}> — **{b.bid_amount:,} OBX**")
-
-                embed.add_field(
-                    name=f"Top Bidders (Total Bidders: {len(bids)})",
-                    value="\n".join(rank_lines),
-                    inline=False,
-                )
-
-            if standings.get("user_bid_amount") is not None:
-                u_rank = standings["user_rank"]
-                u_bid = standings["user_bid_amount"]
-                is_win = standings["is_winning"]
-                status_text = "🟢 **Winning Position**" if is_win else f"🔴 **Outside Winning Positions** (Cutoff: `{standings['winning_cutoff']:,} OBX`)"
-                embed.add_field(
-                    name="📍 Your Standing",
-                    value=f"**Rank:** `#{u_rank}` • **Bid:** `{u_bid:,} OBX` • **Status:** {status_text}",
-                    inline=False,
-                )
-
-            embed.set_footer(text="Rankings update dynamically in real time • Pay-As-Bid")
-            await interaction.followup.send(embed=embed, ephemeral=True)
-        except Exception as exc:
-            logger.error("Error viewing rankings: %s", exc)
-            await interaction.followup.send("❌ Error fetching live rankings.", ephemeral=True)
+        await handle_view_my_auction_position(interaction, str(auction.id))
 
     @discord.ui.button(label="Previous", style=discord.ButtonStyle.secondary, row=1)
     async def btn_prev(self, interaction: discord.Interaction, button: Button):
@@ -1238,60 +1194,133 @@ class AdminCreateAuctionSelectView(View):
         await interaction.response.send_modal(modal)
 
 
-async def handle_view_my_auction_position(interaction: discord.Interaction, auction_id: str):
-    """Render the user's current standing, rank, and bid in a specific auction."""
+async def handle_view_my_auction_position(interaction: discord.Interaction, auction_id: str, session_scope_fn=None):
+    """Render the user's current standing, rank, bid, or refund status in a specific auction."""
+    if session_scope_fn is None:
+        session_scope_fn = session_scope
+
     from apps.obx_tasks.bot.permissions import check_raider_access
     if not await check_raider_access(interaction):
         return
 
     if not _is_response_done(interaction):
-        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
 
     try:
         import uuid
-        auc_uuid = auction_id if isinstance(auction_id, uuid.UUID) else uuid.UUID(str(auction_id))
-        with session_scope() as session:
+        try:
+            auc_uuid = auction_id if isinstance(auction_id, uuid.UUID) else uuid.UUID(str(auction_id).strip())
+        except (ValueError, TypeError):
+            await interaction.followup.send("❌ Invalid auction ID.", ephemeral=True)
+            return
+
+        with session_scope_fn() as session:
             service = AuctionService(session)
-            standings = service.get_auction_standings(auc_uuid, discord_user_id=str(interaction.user.id))
-            auc = standings["auction"]
+            auc = session.query(Auction).filter_by(id=auc_uuid).first()
+            if not auc:
+                await interaction.followup.send("❌ Auction not found.", ephemeral=True)
+                return
+
+            auc_title = str(auc.title)
+            auc_reward = str(auc.reward_title)
+            auc_slots = int(auc.total_slots)
+            auc_min_bid = int(auc.price_or_min_bid or 0)
+
+            standings = service.get_auction_standings(auc.id, discord_user_id=str(interaction.user.id))
+            ranked_bids_data = [
+                (str(b.discord_user_id), int(b.bid_amount))
+                for b in standings.get("ranked_bids", [])
+            ]
+            winning_cutoff = int(standings.get("winning_cutoff", auc_min_bid))
+            user_active_rank = standings.get("user_rank")
+            user_active_bid = standings.get("user_bid_amount")
+            is_winning = bool(standings.get("is_winning"))
+
+            user_bid_rec = (
+                session.query(AuctionBid)
+                .filter_by(auction_id=auc.id, discord_user_id=str(interaction.user.id))
+                .first()
+            )
+            has_bid_rec = user_bid_rec is not None
+            user_rec_bid = int(user_bid_rec.bid_amount) if user_bid_rec else 0
+            user_bid_settled = bool(user_bid_rec.is_settled) if user_bid_rec else False
+            user_bid_winner = user_bid_rec.is_winner if user_bid_rec else None
 
         embed = discord.Embed(
-            title=f"📊 Live Bid Rankings — {auc.title}",
-            description=f"**Reward:** {auc.reward_title} • **Available Spots:** `{auc.total_slots}`\nTop {auc.total_slots} unique bidders win whitelist spots at auction close.\n",
+            title=f"📊 Live Bid Rankings — {auc_title}",
+            description=f"**Reward:** {auc_reward} • **Available Spots:** `{auc_slots}`\nTop {auc_slots} unique bidders win whitelist spots at auction close.\n",
             color=COLOR_GOLD,
         )
 
-        bids = standings["ranked_bids"]
-        if not bids:
-            embed.add_field(name="No Bids Placed Yet", value="Be the first to place a bid and secure the #1 spot!", inline=False)
+        # 1. User's personal standing & bid (always displayed at the top)
+        if user_active_bid is not None and is_winning:
+            status_text = "🟢 **Winning Position**"
+            standing_desc = (
+                f"• **Your Bid:** `{user_active_bid:,} OBX`\n"
+                f"• **Current Rank:** `#{user_active_rank}` of `{auc_slots}` spots\n"
+                f"• **Status:** {status_text}"
+            )
+        elif user_bid_settled and not user_bid_winner:
+            status_text = f"🟡 **Outside Winning Positions** (Cutoff: `{winning_cutoff:,} OBX`) • 💸 **Bid Refunded to Wallet**"
+            standing_desc = (
+                f"• **Previous Bid:** `{user_rec_bid:,} OBX`\n"
+                f"• **Status:** {status_text}\n\n"
+                "💡 *You were outbid by higher bids. Your OBX was automatically refunded to your available wallet balance! You can click **[ BID ]** to enter again with a higher bid.*"
+            )
+        elif user_active_bid is not None and not is_winning:
+            status_text = f"🔴 **Outside Winning Positions** (Cutoff: `{winning_cutoff:,} OBX`)"
+            standing_desc = (
+                f"• **Your Bid:** `{user_active_bid:,} OBX`\n"
+                f"• **Current Rank:** `#{user_active_rank}`\n"
+                f"• **Status:** {status_text}"
+            )
+        elif user_bid_winner:
+            status_text = "🏆 **Won Whitelist Spot!**"
+            standing_desc = (
+                f"• **Winning Bid:** `{user_rec_bid:,} OBX`\n"
+                f"• **Status:** {status_text}"
+            )
+        else:
+            status_text = "ℹ️ **No Bid Placed Yet**"
+            standing_desc = (
+                f"• **Status:** {status_text}\n"
+                f"• **Minimum Required Bid:** `{winning_cutoff:,} OBX`\n\n"
+                "💡 *Click the green **[ BID ]** button on the auction card to place your bid!*"
+            )
+
+        embed.add_field(
+            name="📍 Your Standing",
+            value=standing_desc,
+            inline=False,
+        )
+
+        # 2. Top Bidders Leaderboard
+        if not ranked_bids_data:
+            embed.add_field(
+                name="Top Bidders (0)",
+                value="No active bids placed yet. Be the first to bid and secure the #1 spot!",
+                inline=False,
+            )
         else:
             rank_lines = []
-            for idx, b in enumerate(bids[:15], start=1):
+            for idx, (b_uid, b_amt) in enumerate(ranked_bids_data[:15], start=1):
                 medal = MEDALS.get(idx, f"`#{idx}`")
-                win_icon = "🟢" if idx <= auc.total_slots else "🔴"
-                rank_lines.append(f"{medal} {win_icon} <@{b.discord_user_id}> — **{b.bid_amount:,} OBX**")
+                win_icon = "🟢" if idx <= auc_slots else "🔴"
+                rank_lines.append(f"{medal} {win_icon} <@{b_uid}> — **{b_amt:,} OBX**")
 
             embed.add_field(
-                name=f"Top Bidders (Total Bidders: {len(bids)})",
+                name=f"Top Bidders (Total: {len(ranked_bids_data)})",
                 value="\n".join(rank_lines),
                 inline=False,
             )
 
-        if standings.get("user_bid_amount") is not None:
-            u_rank = standings["user_rank"]
-            u_bid = standings["user_bid_amount"]
-            is_win = standings["is_winning"]
-            status_text = "🟢 **Winning Position**" if is_win else f"🔴 **Outside Winning Positions** (Cutoff: `{standings['winning_cutoff']:,} OBX`)"
-            embed.add_field(
-                name="📍 Your Standing",
-                value=f"**Rank:** `#{u_rank}` • **Bid:** `{u_bid:,} OBX` • **Status:** {status_text}",
-                inline=False,
-            )
-
-        embed.set_footer(text="Rankings update dynamically in real time • Pay-As-Bid")
+        embed.set_footer(text="Rankings update dynamically in real time • Double-Entry Vault")
         await interaction.followup.send(embed=embed, ephemeral=True)
     except Exception as exc:
-        logger.error("Error viewing rankings: %s", exc)
+        logger.error("Error viewing rankings: %s", exc, exc_info=True)
         await interaction.followup.send("❌ Error fetching live rankings.", ephemeral=True)
 
 

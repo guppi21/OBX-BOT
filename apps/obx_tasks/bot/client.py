@@ -372,79 +372,8 @@ class OBXTaskBot(commands.Bot):
                 await interaction.response.send_message("❌ Failed to open bid dialog.", ephemeral=True)
 
     async def _handle_auc_card_rankings(self, interaction: discord.Interaction, auction_id: str):
-        try:
-            await interaction.response.defer(ephemeral=True)
-            auc_uuid = auction_id if isinstance(auction_id, uuid.UUID) else uuid.UUID(str(auction_id))
-            with session_scope() as session:
-                service = AuctionService(session)
-                auc = session.query(Auction).filter_by(id=auc_uuid).first()
-                if not auc:
-                    await interaction.followup.send("❌ Auction not found.", ephemeral=True)
-                    return
-                standings = service.get_auction_standings(auc.id, discord_user_id=str(interaction.user.id))
-                user_bid_rec = (
-                    session.query(AuctionBid)
-                    .filter_by(auction_id=auc.id, discord_user_id=str(interaction.user.id))
-                    .first()
-                )
-                user_bid_settled = user_bid_rec.is_settled if user_bid_rec else False
-
-            from apps.obx_tasks.bot.ui_theme import COLOR_GOLD
-            from apps.obx_tasks.bot.auction_views import MEDALS
-            embed = discord.Embed(
-                title=f"📊 Live Bid Rankings — {auc.title}",
-                description=f"**Reward:** {auc.reward_title} • **Available Slots:** `{auc.total_slots}`\nTop {auc.total_slots} unique bidders win whitelist spots at auction close.\n",
-                color=COLOR_GOLD,
-            )
-
-            bids = standings["ranked_bids"]
-            if not bids:
-                embed.add_field(name="No Bids Placed Yet", value="Be the first to place a bid and secure the #1 spot!", inline=False)
-            else:
-                rank_lines = []
-                for idx, b in enumerate(bids[:15], start=1):
-                    medal = MEDALS.get(idx, f"`#{idx}`")
-                    win_icon = "🟢" if idx <= auc.total_slots else "🔴"
-                    rank_lines.append(f"{medal} {win_icon} <@{b.discord_user_id}> — **{b.bid_amount:,} OBX**")
-
-                embed.add_field(
-                    name=f"Top Bidders (Total Bidders: {len(bids)})",
-                    value="\n".join(rank_lines),
-                    inline=False,
-                )
-
-            view = None
-            if standings.get("user_bid_amount") is not None or user_bid_rec:
-                u_rank = standings.get("user_rank") if standings.get("user_rank") is not None else "Outbid"
-                u_bid = standings["user_bid_amount"] if standings.get("user_bid_amount") is not None else user_bid_rec.bid_amount
-                is_win = standings["is_winning"]
-                if is_win:
-                    status_text = "🟢 **Winning Position**"
-                elif user_bid_settled:
-                    status_text = f"🟡 **Outside Winning Positions** (Cutoff: `{standings['winning_cutoff']:,} OBX`) • 💸 *Bid Refunded to Wallet*"
-                else:
-                    status_text = f"🔴 **Outside Winning Positions** (Cutoff: `{standings['winning_cutoff']:,} OBX`)"
-                    if auc.status == AuctionStatus.ACTIVE:
-                        view = discord.ui.View()
-                        view.add_item(discord.ui.Button(
-                            label=f"Withdraw Refund ({u_bid:,} OBX)",
-                            style=discord.ButtonStyle.danger,
-                            emoji="💸",
-                            custom_id=f"obx:auc_card:withdraw:{auc.id}",
-                        ))
-
-                rank_str = f"#{u_rank}" if isinstance(u_rank, int) else u_rank
-                embed.add_field(
-                    name="📍 Your Standing",
-                    value=f"**Rank:** `{rank_str}` • **Bid:** `{u_bid:,} OBX` • **Status:** {status_text}",
-                    inline=False,
-                )
-
-            embed.set_footer(text="Rankings update dynamically in real time • Pay-As-Bid")
-            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
-        except Exception as exc:
-            logger.error("Error viewing rankings from card: %s", exc)
-            await interaction.followup.send("❌ Error fetching live rankings.", ephemeral=True)
+        from apps.obx_tasks.bot.auction_views import handle_view_my_auction_position
+        await handle_view_my_auction_position(interaction, auction_id, session_scope_fn=session_scope)
 
     async def _handle_auc_card_withdraw(self, interaction: discord.Interaction, auction_id: str):
         try:
