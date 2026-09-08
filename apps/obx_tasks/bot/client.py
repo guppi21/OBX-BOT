@@ -1141,22 +1141,33 @@ def create_discord_bot() -> OBXTaskBot:
                 await interaction.followup.send("❌ Must be executed in a guild.", ephemeral=True)
                 return
 
-            target_channel = channel
-            if not target_channel:
+            channels_to_scan = []
+            if channel:
+                channels_to_scan.append(channel)
+            else:
                 with session_scope() as session:
                     from apps.obx_tasks.services.channel_service import ChannelService
                     ch_s = ChannelService(session)
                     cfg = ch_s.get_or_create_guild_config(str(interaction.guild.id))
-                    admin_ch_id = cfg.admin_channel_id
+                    admin_ch_id = getattr(cfg, "admin_logs_channel_id", None) or getattr(cfg, "admin_channel_id", None)
 
                 if admin_ch_id:
-                    target_channel = interaction.guild.get_channel(int(admin_ch_id))
+                    target_ch = interaction.guild.get_channel(int(admin_ch_id))
+                    if target_ch and isinstance(target_ch, discord.TextChannel):
+                        channels_to_scan.append(target_ch)
 
-            if not target_channel:
-                target_channel = interaction.channel
+                keywords = ["log", "admin", "sub", "task", "audit", "mod"]
+                if hasattr(interaction.guild, "text_channels"):
+                    for tch in interaction.guild.text_channels:
+                        if any(k in tch.name.lower() for k in keywords):
+                            if tch not in channels_to_scan:
+                                channels_to_scan.append(tch)
 
-            if not target_channel or not isinstance(target_channel, discord.TextChannel):
-                await interaction.followup.send("❌ Could not determine text channel to scan. Please specify `channel` parameter.", ephemeral=True)
+                if interaction.channel and isinstance(interaction.channel, discord.TextChannel) and interaction.channel not in channels_to_scan:
+                    channels_to_scan.append(interaction.channel)
+
+            if not channels_to_scan:
+                await interaction.followup.send("❌ Could not determine text channels to scan. Please specify `channel` parameter.", ephemeral=True)
                 return
 
             import re
@@ -1176,62 +1187,72 @@ def create_discord_bot() -> OBXTaskBot:
             name_obx_pattern = re.compile(r"[@]([^\n—–\-]+?)\s*[—–\-]\s*([0-9,]+)\s*OBX", re.IGNORECASE)
 
             scanned_count = 0
-            async for msg in target_channel.history(limit=min(1000, max(10, limit))):
-                scanned_count += 1
-                texts_to_scan = [str(msg.content)] if getattr(msg, "content", None) else []
-                for emb in getattr(msg, "embeds", []):
-                    desc = getattr(emb, "description", None)
-                    if isinstance(desc, str) and desc:
-                        texts_to_scan.append(desc)
-                    fields = getattr(emb, "fields", None)
-                    if isinstance(fields, (list, tuple)):
-                        for fld in fields:
-                            val = getattr(fld, "value", None)
-                            if isinstance(val, str) and val:
-                                texts_to_scan.append(val)
+            scanned_channel_names = []
+            for target_channel in channels_to_scan:
+                scanned_channel_names.append(target_channel.name)
+                try:
+                    async for msg in target_channel.history(limit=min(1000, max(10, limit))):
+                        scanned_count += 1
+                        texts_to_scan = [str(msg.content)] if getattr(msg, "content", None) else []
+                        for emb in getattr(msg, "embeds", []):
+                            desc = getattr(emb, "description", None)
+                            if isinstance(desc, str) and desc:
+                                texts_to_scan.append(desc)
+                            fields = getattr(emb, "fields", None)
+                            if isinstance(fields, (list, tuple)):
+                                for fld in fields:
+                                    val = getattr(fld, "value", None)
+                                    if isinstance(val, str) and val:
+                                        texts_to_scan.append(val)
 
-                for text in texts_to_scan:
-                    if not text:
-                        continue
+                        for text in texts_to_scan:
+                            if not text:
+                                continue
 
-                    # 1. Submission approval
-                    m_sub = sub_user_pattern.search(text)
-                    if m_sub:
-                        u_id = m_sub.group(1)
-                        m_rew = sub_reward_pattern.search(text)
-                        if m_rew:
-                            amt = int(m_rew.group(1).replace(",", ""))
-                            user_totals[u_id] = user_totals.get(u_id, 0) + amt
+                            # 1. Submission approval
+                            m_sub = sub_user_pattern.search(text)
+                            if m_sub:
+                                u_id = m_sub.group(1)
+                                m_rew = sub_reward_pattern.search(text)
+                                if m_rew:
+                                    amt = int(m_rew.group(1).replace(",", ""))
+                                    user_totals[u_id] = user_totals.get(u_id, 0) + amt
 
-                    # 2. Custom reward
-                    m_cust = custom_grant_pattern.search(text)
-                    if m_cust:
-                        amt = int(m_cust.group(1).replace(",", ""))
-                        u_id = m_cust.group(2)
-                        user_totals[u_id] = user_totals.get(u_id, 0) + amt
+                            # 2. Custom reward
+                            m_cust = custom_grant_pattern.search(text)
+                            if m_cust:
+                                amt = int(m_cust.group(1).replace(",", ""))
+                                u_id = m_cust.group(2)
+                                user_totals[u_id] = user_totals.get(u_id, 0) + amt
 
-                    # 3. Mentions with OBX (e.g. in auction cards)
-                    for m_mention, amt_str in mention_obx_pattern.findall(text):
-                        amt = int(amt_str.replace(",", ""))
-                        if amt > user_totals.get(m_mention, 0):
-                            user_totals[m_mention] = amt
+                            # 3. Mentions with OBX (e.g. in auction cards)
+                            for m_mention, amt_str in mention_obx_pattern.findall(text):
+                                amt = int(amt_str.replace(",", ""))
+                                if amt > user_totals.get(m_mention, 0):
+                                    user_totals[m_mention] = amt
 
-                    # 4. Username matching
-                    for raw_name, amt_str in name_obx_pattern.findall(text):
-                        amt = int(amt_str.replace(",", ""))
-                        clean_name = raw_name.strip().split()[0].lower()
-                        for member in interaction.guild.members:
-                            if clean_name in member.name.lower() or clean_name in member.display_name.lower():
-                                m_id = str(member.id)
-                                if amt > user_totals.get(m_id, 0):
-                                    user_totals[m_id] = amt
-                                break
+                            # 4. Username matching
+                            for raw_name, amt_str in name_obx_pattern.findall(text):
+                                amt = int(amt_str.replace(",", ""))
+                                clean_name = raw_name.strip().split()[0].lower()
+                                if hasattr(interaction.guild, "members"):
+                                    for member in interaction.guild.members:
+                                        if clean_name in member.name.lower() or clean_name in member.display_name.lower():
+                                            m_id = str(member.id)
+                                            if amt > user_totals.get(m_id, 0):
+                                                user_totals[m_id] = amt
+                                            break
+                except Exception as ch_err:
+                    logger.debug("Could not scan channel %s: %s", getattr(target_channel, 'name', target_channel), ch_err)
 
             if not user_totals:
+                channels_str = ", ".join(f"#{name}" for name in scanned_channel_names[:5])
                 await interaction.followup.send(
-                    f"🔍 Scanned `{scanned_count}` messages in {target_channel.mention}, but found no logs or member OBX records.\n\n"
-                    "💡 **Tip**: You can use `/admin-bulk-restore` to restore balances directly, for example:\n"
-                    "`/admin-bulk-restore entries: <@1344974194768740364> 14, <@1298929333213073451> 10, @user 15`",
+                    f"🔍 Scanned `{scanned_count}` messages across `{len(scanned_channel_names)}` channel(s) ({channels_str}), but found no approval logs.\n\n"
+                    "💡 **Next Best Options**:\n"
+                    "• `/admin-recover-from-dms` — Scans bot DM receipts sent directly to members\n"
+                    "• `/admin-bulk-restore` — Manually credit members (e.g. `<@user> 15`)\n"
+                    "• `/admin-recover-from-logs channel: #specific-channel` — Specify the exact channel to scan",
                     ephemeral=True,
                 )
                 return
@@ -1261,9 +1282,9 @@ def create_discord_bot() -> OBXTaskBot:
                 summary_text += f"\n*...and {len(restored_summary) - 20} more users*"
 
             embed = discord.Embed(
-                title="♻️ Balances Reconstructed from Admin Logs",
+                title="♻️ Balances Reconstructed from Logs",
                 description=(
-                    f"Successfully scanned `{scanned_count}` log messages in {target_channel.mention}!\n\n"
+                    f"Successfully scanned `{scanned_count}` messages across `{len(scanned_channel_names)}` channels!\n\n"
                     f"👥 **Users Restored**: `{len(user_totals)}`\n"
                     f"💰 **Total OBX Re-Credited**: `{total_restored_obx:,} OBX`\n\n"
                     f"**Restored Members:**\n{summary_text}\n\n"
@@ -1275,6 +1296,172 @@ def create_discord_bot() -> OBXTaskBot:
         except Exception as exc:
             logger.error("Error in admin_recover_from_logs: %s", exc)
             await interaction.followup.send(f"❌ Recovery error: {str(exc)}", ephemeral=True)
+
+    @bot.tree.command(name="admin-recover-from-dms", description="[Admin] Last resort: Scan bot DM receipts sent to members to recover their last known balances")
+    @app_commands.describe(max_users="Maximum members to scan (default 100)")
+    async def admin_recover_from_dms_command(interaction: discord.Interaction, max_users: int = 100):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            if not interaction.guild:
+                await interaction.followup.send("❌ Must be executed inside a server.", ephemeral=True)
+                return
+
+            import re
+            from apps.obx_core.services.wallet_service import WalletService
+            from packages.database.models.user import User
+
+            # Candidate users from database users table and guild members
+            candidate_ids = set()
+            with session_scope() as session:
+                db_users = session.query(User).all()
+                for u in db_users:
+                    if u.discord_user_id:
+                        candidate_ids.add(str(u.discord_user_id))
+
+            if hasattr(interaction.guild, "members"):
+                for m in interaction.guild.members:
+                    if not getattr(m, "bot", False):
+                        candidate_ids.add(str(m.id))
+
+            if not candidate_ids:
+                await interaction.followup.send("❌ No candidate users found to scan.", ephemeral=True)
+                return
+
+            user_balances = {}
+            user_accumulated = {}
+            users_scanned = 0
+            dms_checked = 0
+
+            # Scan up to max_users candidates
+            for uid_str in list(candidate_ids)[:max(1, min(500, max_users))]:
+                users_scanned += 1
+                try:
+                    uid_int = int(uid_str)
+                except ValueError:
+                    continue
+
+                user = bot.get_user(uid_int)
+                if not user and hasattr(bot, "fetch_user"):
+                    try:
+                        res = bot.fetch_user(uid_int)
+                        user = await res if inspect.isawaitable(res) else res
+                    except Exception:
+                        user = None
+
+                if not user or getattr(user, "bot", False):
+                    continue
+
+                try:
+                    dm = user.dm_channel or await user.create_dm()
+                    if not dm:
+                        continue
+                    dms_checked += 1
+
+                    # Scan the latest messages in this DM
+                    async for msg in dm.history(limit=50):
+                        # Only examine messages sent by the bot
+                        if getattr(msg, "author", None) and msg.author.id != bot.user.id:
+                            continue
+
+                        texts = []
+                        if getattr(msg, "content", None):
+                            texts.append(str(msg.content))
+                        for emb in getattr(msg, "embeds", []):
+                            if getattr(emb, "description", None):
+                                texts.append(str(emb.description))
+                            if getattr(emb, "title", None):
+                                texts.append(str(emb.title))
+                            for fld in getattr(emb, "fields", []):
+                                if getattr(fld, "value", None):
+                                    texts.append(str(fld.value))
+
+                        found_bal = None
+                        for t in texts:
+                            # 1. Match NEW BALANCE line
+                            m_bal = re.search(r"NEW BALANCE[^\d]+([0-9,]+)\s*OBX", t, re.IGNORECASE)
+                            if not m_bal:
+                                m_bal = re.search(r"Balance[:\s*`]+([0-9,]+)\s*OBX", t, re.IGNORECASE)
+                            if m_bal:
+                                found_bal = int(m_bal.group(1).replace(",", ""))
+                                break
+
+                            # 2. Match REWARD EARNED line to accumulate if no total balance found
+                            m_rew = re.search(r"REWARD EARNED[^\d]+([0-9,]+)\s*OBX", t, re.IGNORECASE)
+                            if m_rew:
+                                rew_amt = int(m_rew.group(1).replace(",", ""))
+                                user_accumulated[uid_str] = user_accumulated.get(uid_str, 0) + rew_amt
+
+                        if found_bal is not None and found_bal > 0:
+                            # History is newest first, so the first found NEW BALANCE is the most recent
+                            user_balances[uid_str] = found_bal
+                            break
+
+                except discord.Forbidden:
+                    # User has closed DMs or blocked bot
+                    continue
+                except Exception as dm_err:
+                    logger.debug("Could not inspect DM for user %s: %s", uid_str, dm_err)
+                    continue
+
+            # For any user where exact NEW BALANCE wasn't found, use accumulated rewards
+            for u_id, acc_amt in user_accumulated.items():
+                if u_id not in user_balances and acc_amt > 0:
+                    user_balances[u_id] = acc_amt
+
+            if not user_balances:
+                await interaction.followup.send(
+                    f"🔍 Checked `{dms_checked}` DM channels across `{users_scanned}` members, but found no balance records in DM history.\n\n"
+                    "💡 **Alternative Recovery Options**:\n"
+                    "• `/admin-recover-from-logs` — Scans server log and submission channels\n"
+                    "• `/admin-bulk-restore` — Manually credit members (e.g. `<@user> 15`)\n"
+                    "• `/admin-restore-backup` — Restore from an uploaded `.json` snapshot",
+                    ephemeral=True,
+                )
+                return
+
+            with session_scope() as session:
+                ws = WalletService(session)
+                restored_summary = []
+                total_restored = 0
+
+                for u_id, amt in user_balances.items():
+                    ws.get_or_create_user(u_id)
+                    ws.credit(
+                        discord_user_id=u_id,
+                        amount=amt,
+                        reference_type="admin_dm_recovery",
+                        idempotency_key=f"dm_recover_{u_id}_{amt}",
+                    )
+                    total_restored += amt
+                    restored_summary.append(f"• <@{u_id}>: `{amt:,} OBX`")
+
+            from apps.obx_tasks.bot.announcement_service import deploy_or_update_leaderboard
+            await deploy_or_update_leaderboard(interaction.guild, bot)
+
+            summary_text = "\n".join(restored_summary[:20])
+            if len(restored_summary) > 20:
+                summary_text += f"\n*...and {len(restored_summary) - 20} more users*"
+
+            embed = discord.Embed(
+                title="📥 Balances Recovered from Member DMs",
+                description=(
+                    f"Successfully recovered `{total_restored:,} OBX` across `{len(user_balances)}` members from DM receipts!\n\n"
+                    f"• 👥 **Members Checked**: `{users_scanned}`\n"
+                    f"• 💬 **DMs Scanned**: `{dms_checked}`\n"
+                    f"• 💎 **Total Restored**: `{total_restored:,} OBX`\n\n"
+                    f"**Restored Members:**\n{summary_text}\n\n"
+                    "📢 **Leaderboard Updated in `#leaderboard`!**"
+                ),
+                color=discord.Color.green(),
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as exc:
+            logger.error("Error in admin_recover_from_dms: %s", exc)
+            await interaction.followup.send(f"❌ DM recovery error: {str(exc)}", ephemeral=True)
 
     @bot.tree.command(name="admin-bulk-restore", description="[Admin] Batch restore or credit OBX balances to multiple users")
     @app_commands.describe(entries="List of user mentions or IDs with amounts (e.g. '@user1 15, @user2 14' or lines)")

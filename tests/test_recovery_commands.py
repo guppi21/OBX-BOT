@@ -203,3 +203,102 @@ async def test_admin_backup_and_restore_cycle(db_session):
     assert w1.available_balance == 250
     assert w2.available_balance == 150
 
+
+@pytest.mark.asyncio
+async def test_admin_recover_from_dms(db_session):
+    bot = create_discord_bot()
+    dm_cmd = None
+    for cmd in bot.tree.get_commands():
+        if cmd.name == "admin-recover-from-dms":
+            dm_cmd = cmd
+            break
+
+    assert dm_cmd is not None
+
+    ws = WalletService(db_session)
+    ws.get_or_create_user("123456789")
+    ws.get_or_create_user("987654321")
+
+    # Set balances to 0 to simulate wipe
+    _, w1, _ = ws.get_or_create_user("123456789")
+    w1.available_balance = 0
+    _, w2, _ = ws.get_or_create_user("987654321")
+    w2.available_balance = 0
+    db_session.commit()
+
+    inter = MagicMock(spec=discord.Interaction)
+    inter.guild = MagicMock(id=1527720394151170048)
+    inter.guild.members = []
+    inter.response.defer = AsyncMock()
+    inter.followup.send = AsyncMock()
+
+    # User 1 mock with DM message containing "NEW BALANCE: 45 OBX"
+    u1 = MagicMock(spec=discord.User)
+    u1.id = 123456789
+    u1.bot = False
+    dm1 = MagicMock(spec=discord.DMChannel)
+    msg1 = MagicMock()
+    msg1.author.id = bot.user.id if bot.user else 999999
+    emb1 = MagicMock()
+    emb1.description = "🎉 CONGRATULATIONS!\n\n💎 **REWARD EARNED**\n+15 OBX\n\n💰 **NEW BALANCE**\n45 OBX"
+    emb1.title = None
+    emb1.fields = []
+    msg1.embeds = [emb1]
+    msg1.content = None
+
+    async def mock_dm_hist1(limit=50):
+        yield msg1
+
+    dm1.history = mock_dm_hist1
+    u1.create_dm = AsyncMock(return_value=dm1)
+    u1.dm_channel = dm1
+
+    # User 2 mock with DM message containing "Reward Credited: 30 OBX"
+    u2 = MagicMock(spec=discord.User)
+    u2.id = 987654321
+    u2.bot = False
+    dm2 = MagicMock(spec=discord.DMChannel)
+    msg2 = MagicMock()
+    msg2.author.id = bot.user.id if bot.user else 999999
+    emb2 = MagicMock()
+    emb2.description = "🎉 CONGRATULATIONS!\n\n💎 **REWARD EARNED**\n+30 OBX"
+    emb2.title = None
+    emb2.fields = []
+    msg2.embeds = [emb2]
+    msg2.content = None
+
+    async def mock_dm_hist2(limit=50):
+        yield msg2
+
+    dm2.history = mock_dm_hist2
+    u2.create_dm = AsyncMock(return_value=dm2)
+    u2.dm_channel = dm2
+
+    def mock_get_user(uid):
+        if uid == 123456789:
+            return u1
+        elif uid == 987654321:
+            return u2
+        return None
+
+    bot.get_user = mock_get_user
+    bot_user = MagicMock()
+    bot_user.id = 999999
+    bot._connection.user = bot_user
+    msg1.author.id = 999999
+    msg2.author.id = 999999
+
+    with patch("apps.obx_tasks.bot.client.is_admin", return_value=True), \
+         patch("apps.obx_tasks.bot.client.session_scope", lambda: mock_session_scope_for(db_session)), \
+         patch("apps.obx_tasks.bot.announcement_service.deploy_or_update_leaderboard", new_callable=AsyncMock):
+        await dm_cmd.callback(inter, max_users=100)
+
+    assert inter.followup.send.called
+    res_args = inter.followup.send.call_args[1]
+    assert "Recovered from Member DMs" in res_args["embed"].title
+
+    db_session.refresh(w1)
+    db_session.refresh(w2)
+    assert w1.available_balance == 45
+    assert w2.available_balance == 30
+
