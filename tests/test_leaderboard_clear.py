@@ -122,9 +122,8 @@ async def test_admin_clear_leaderboard_slash_command_flow(db_session):
 
 
 @pytest.mark.asyncio
-async def test_on_ready_auto_clears_new_server_once(db_session):
+async def test_on_ready_preserves_wallets(db_session):
     from apps.obx_tasks.bot.client import OBXTaskBot
-    from packages.database.models.channel_config import GuildConfig
     from apps.obx_core.services.wallet_service import WalletService
 
     ws = WalletService(db_session)
@@ -159,10 +158,7 @@ async def test_on_ready_auto_clears_new_server_once(db_session):
 
         await OBXTaskBot.on_ready(bot)
 
-    cfg = db_session.query(GuildConfig).filter_by(guild_id="1527720394151170048").first()
-    assert cfg is not None
-    assert cfg.updated_by == "INIT_CLEARED_1527720394151170048"
-
     from packages.database.models.wallet import Wallet
     w = db_session.query(Wallet).filter_by(user_id=user.id).first()
-    assert w.available_balance == 0
+    # Wallets must remain completely intact across bot startups and deployments
+    assert w.available_balance == 500

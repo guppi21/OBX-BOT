@@ -696,7 +696,37 @@ class OBXAdminHubView(View):
         if not is_admin(interaction):
             await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
             return
+        embed = discord.Embed(
+            title="⚠️ Confirm Leaderboard Reset",
+            description=(
+                "**WARNING:** This will reset all raider balances, submissions, and leaderboard rankings.\n\n"
+                "Are you sure you want to proceed?"
+            ),
+            color=COLOR_RED,
+        )
+        view = AdminResetLeaderboardConfirmView()
+        await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
 
+    @discord.ui.button(label="Refresh Hub", style=discord.ButtonStyle.secondary, custom_id="obx:admin:refresh_hub", row=2)
+    async def refresh_hub_btn(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
+        from apps.obx_tasks.bot.announcement_service import deploy_or_update_admin_hub
+        await deploy_or_update_admin_hub(interaction.guild, interaction.client)
+        if hasattr(interaction, "response") and not _is_response_done(interaction):
+            await interaction.response.send_message("✅ Admin Hub refreshed in-place.", ephemeral=True)
+
+
+class AdminResetLeaderboardConfirmView(View):
+    def __init__(self):
+        super().__init__(timeout=60)
+
+    @discord.ui.button(label="Confirm Reset All", style=discord.ButtonStyle.danger, emoji="🔴")
+    async def confirm_btn(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
         await interaction.response.defer(ephemeral=True)
         try:
             from apps.obx_tasks.services.leaderboard_service import LeaderboardService
@@ -715,32 +745,19 @@ class OBXAdminHubView(View):
             embed = discord.Embed(
                 title="🗑️ OBX LEADERBOARD CLEARED & RESET",
                 description=(
-                    "All community balances and submission history have been successfully reset.\n"
-                    "The leaderboard is now completely empty and ready for fresh competition!\n\n"
+                    "All community balances and submission history have been reset.\n\n"
                     f"• **Wallets Reset**: `{stats['wallets_reset']}`\n"
                     f"• **Submissions Cleared**: `{stats['submissions_cleared']}`\n"
                     f"• **Task Counters Reset**: `{stats['tasks_reset']}`\n"
                     f"• **Ledger Records Reset**: `{stats['ledger_cleared']}`\n"
-                    f"• **Active Standings**: Clean (`*No raiders ranked yet*`)"
                     f"{refresh_msg}"
                 ),
                 color=COLOR_GREEN,
             )
-            embed.set_footer(text="Administrative Reset • Double-Entry Ledger Synchronized")
             await interaction.followup.send(embed=embed, ephemeral=True)
         except Exception as exc:
-            logger.error("Error resetting leaderboard from Admin Hub: %s", exc)
+            logger.error("Error resetting leaderboard: %s", exc)
             await interaction.followup.send(f"❌ Error resetting leaderboard: {exc}", ephemeral=True)
-
-    @discord.ui.button(label="Refresh Hub", style=discord.ButtonStyle.secondary, custom_id="obx:admin:refresh_hub", row=2)
-    async def refresh_hub_btn(self, interaction: discord.Interaction, button: Button):
-        if not is_admin(interaction):
-            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
-            return
-        from apps.obx_tasks.bot.announcement_service import deploy_or_update_admin_hub
-        await deploy_or_update_admin_hub(interaction.guild, interaction.client)
-        if hasattr(interaction, "response") and not _is_response_done(interaction):
-            await interaction.response.send_message("✅ Admin Hub refreshed in-place.", ephemeral=True)
 
 
 AdminPanelView = OBXAdminHubView

@@ -675,23 +675,6 @@ class OBXTaskBot(commands.Bot):
             except Exception as cfg_err:
                 logger.warning("Error initializing channel config for guild '%s': %s", g.name, cfg_err)
 
-        # One-time automated leaderboard wipe for new server transition
-        target_guild_id = "1527720394151170048"
-        try:
-            with session_scope() as session:
-                from apps.obx_tasks.services.channel_service import ChannelService
-                from apps.obx_tasks.services.leaderboard_service import LeaderboardService
-                ch_s = ChannelService(session)
-                cfg = ch_s.get_or_create_guild_config(target_guild_id)
-                wipe_flag = f"INIT_CLEARED_{target_guild_id}"
-                if cfg.updated_by != wipe_flag:
-                    lb_s = LeaderboardService(session)
-                    stats = lb_s.clear_leaderboard_data()
-                    cfg.updated_by = wipe_flag
-                    session.commit()
-                    logger.info("One-time automated leaderboard reset completed for guild %s: %s", target_guild_id, stats)
-        except Exception as init_err:
-            logger.error("Error executing initial leaderboard reset for target guild: %s", init_err)
 
         # Auto-deploy / refresh public systems across configured channels
         for g in self.guilds:
