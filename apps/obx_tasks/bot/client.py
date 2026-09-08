@@ -1021,6 +1021,171 @@ def create_discord_bot() -> OBXTaskBot:
             logger.error("Error in admin_grant_reward: %s", exc)
             await interaction.followup.send(f"❌ Error granting reward: {str(exc)}", ephemeral=True)
 
+    @bot.tree.command(name="admin-recover-from-logs", description="[Admin] Scan #obx-admin-logs history and auto-reconstruct user balances")
+    @app_commands.describe(limit="Number of past log messages to scan (default 500)")
+    async def admin_recover_from_logs_command(interaction: discord.Interaction, limit: int = 500):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            if not interaction.guild:
+                await interaction.followup.send("❌ Must be executed in a guild.", ephemeral=True)
+                return
+
+            with session_scope() as session:
+                from apps.obx_tasks.services.channel_service import ChannelService
+                ch_s = ChannelService(session)
+                cfg = ch_s.get_or_create_guild_config(str(interaction.guild.id))
+                admin_ch_id = cfg.admin_channel_id
+
+            if not admin_ch_id:
+                await interaction.followup.send("❌ Admin log channel is not configured.", ephemeral=True)
+                return
+
+            ch = interaction.guild.get_channel(int(admin_ch_id))
+            if not ch or not isinstance(ch, discord.TextChannel):
+                await interaction.followup.send(f"❌ Admin channel `{admin_ch_id}` not found.", ephemeral=True)
+                return
+
+            import re
+            user_totals = {}
+
+            sub_user_pattern = re.compile(r"approved submission for <@(\d+)>", re.IGNORECASE)
+            sub_reward_pattern = re.compile(r"Reward Credited:\*\* `\+?([0-9,]+) OBX`", re.IGNORECASE)
+            custom_grant_pattern = re.compile(r"credited \*\*([0-9,]+) OBX\*\* to <@(\d+)>", re.IGNORECASE)
+
+            scanned_count = 0
+            async for msg in ch.history(limit=min(1000, max(10, limit))):
+                scanned_count += 1
+                for emb in msg.embeds:
+                    desc = emb.description or ""
+                    m_sub = sub_user_pattern.search(desc)
+                    if m_sub:
+                        u_id = m_sub.group(1)
+                        m_rew = sub_reward_pattern.search(desc)
+                        if m_rew:
+                            amt = int(m_rew.group(1).replace(",", ""))
+                            user_totals[u_id] = user_totals.get(u_id, 0) + amt
+
+                    m_cust = custom_grant_pattern.search(desc)
+                    if m_cust:
+                        amt = int(m_cust.group(1).replace(",", ""))
+                        u_id = m_cust.group(2)
+                        user_totals[u_id] = user_totals.get(u_id, 0) + amt
+
+            if not user_totals:
+                await interaction.followup.send(
+                    f"🔍 Scanned `{scanned_count}` messages in {ch.mention}, but found no approved reward logs.\n"
+                    "You can use `/admin-bulk-restore` to restore balances directly.",
+                    ephemeral=True,
+                )
+                return
+
+            with session_scope() as session:
+                from apps.obx_core.services.wallet_service import WalletService
+                ws = WalletService(session)
+                restored_summary = []
+                total_restored_obx = 0
+
+                for u_id, amt in user_totals.items():
+                    ws.get_or_create_user(u_id)
+                    ws.credit(
+                        discord_user_id=u_id,
+                        amount=amt,
+                        reference_type="admin_restore",
+                        idempotency_key=f"restore_log_{u_id}_{amt}",
+                    )
+                    total_restored_obx += amt
+                    restored_summary.append(f"• <@{u_id}>: `{amt:,} OBX`")
+
+            from apps.obx_tasks.bot.announcement_service import deploy_or_update_leaderboard
+            await deploy_or_update_leaderboard(interaction.guild, bot)
+
+            summary_text = "\n".join(restored_summary[:20])
+            if len(restored_summary) > 20:
+                summary_text += f"\n*...and {len(restored_summary) - 20} more users*"
+
+            embed = discord.Embed(
+                title="♻️ Balances Reconstructed from Admin Logs",
+                description=(
+                    f"Successfully scanned `{scanned_count}` log messages in {ch.mention}!\n\n"
+                    f"👥 **Users Restored**: `{len(user_totals)}`\n"
+                    f"💰 **Total OBX Re-Credited**: `{total_restored_obx:,} OBX`\n\n"
+                    f"**Restored Members:**\n{summary_text}\n\n"
+                    "📢 **Leaderboard Updated in `#leaderboard`!**"
+                ),
+                color=discord.Color.green(),
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as exc:
+            logger.error("Error in admin_recover_from_logs: %s", exc)
+            await interaction.followup.send(f"❌ Recovery error: {str(exc)}", ephemeral=True)
+
+    @bot.tree.command(name="admin-bulk-restore", description="[Admin] Batch restore or credit OBX balances to multiple users")
+    @app_commands.describe(entries="List of user mentions or IDs with amounts (e.g. '@user1 15, @user2 14' or lines)")
+    async def admin_bulk_restore_command(interaction: discord.Interaction, entries: str):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            import re
+            pattern = re.compile(r"(?:<@!?(\d+)>|(\d{15,22}))[^\d]+(\d+)")
+            matches = pattern.findall(entries)
+
+            if not matches:
+                await interaction.followup.send(
+                    "❌ Could not parse user-amount pairs.\nFormat example:\n`<@1344974194768740364> 14`\n`@user 15`\n`1298929333213073451: 10`",
+                    ephemeral=True,
+                )
+                return
+
+            restored_list = []
+            total_obx = 0
+
+            with session_scope() as session:
+                from apps.obx_core.services.wallet_service import WalletService
+                ws = WalletService(session)
+                import uuid
+                batch_id = str(uuid.uuid4())[:8]
+
+                for m in matches:
+                    u_id = m[0] or m[1]
+                    amt = int(m[2])
+                    if amt <= 0:
+                        continue
+                    ws.get_or_create_user(u_id)
+                    ws.credit(
+                        discord_user_id=u_id,
+                        amount=amt,
+                        reference_type="admin_bulk_restore",
+                        idempotency_key=f"bulk_restore_{batch_id}_{u_id}_{amt}",
+                    )
+                    total_obx += amt
+                    restored_list.append(f"• <@{u_id}>: `+{amt:,} OBX`")
+
+            if interaction.guild:
+                from apps.obx_tasks.bot.announcement_service import deploy_or_update_leaderboard
+                await deploy_or_update_leaderboard(interaction.guild, bot)
+
+            summary_text = "\n".join(restored_list[:25])
+            embed = discord.Embed(
+                title="✅ Bulk OBX Restored Successfully",
+                description=(
+                    f"Successfully credited `{total_obx:,} OBX` across `{len(restored_list)}` raiders!\n\n"
+                    f"{summary_text}\n\n"
+                    "📢 Leaderboard has been refreshed in `#leaderboard`."
+                ),
+                color=discord.Color.green(),
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as exc:
+            logger.error("Error in admin_bulk_restore: %s", exc)
+            await interaction.followup.send(f"❌ Bulk restore error: {str(exc)}", ephemeral=True)
+
     @bot.tree.command(name="admin-settle-auction", description="[Admin] Settle and finalize an auction to distribute rewards and unlock losing bids")
     @app_commands.describe(auction_id="The UUID of the auction to settle")
     async def admin_settle_auction_command(interaction: discord.Interaction, auction_id: str):
