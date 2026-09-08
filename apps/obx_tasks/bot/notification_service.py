@@ -107,11 +107,212 @@ def build_reward_celebration_embed(
 # In-memory tracking to prevent duplicate DM notifications if interaction retries
 _SENT_CELEBRATION_DMS = set()
 _SENT_APPROVAL_DMS = set()
+_SENT_WINNER_DMS = set()
 
 
 from packages.database.session import session_scope
 from apps.obx_tasks.services.channel_service import ChannelService
 from packages.shared.config import get_settings
+
+
+async def send_auction_winner_dm(
+    bot: discord.Client,
+    auction: Any,
+    discord_user_id: str,
+    *,
+    is_test: bool = False,
+    return_detail: bool = False,
+) -> Union[bool, Tuple[bool, str]]:
+    """Send a sweet and short congratulations DM to an auction winner.
+
+    Contains only:
+    - Title: 🎉 CONGRATULATIONS!
+    - Description: You have won the auction for **{Project Title} ({Type})**!
+    - Image: Project banner (if present)
+    - No buttons attached.
+
+    Idempotent: will not send duplicate DMs for the same auction and user.
+    """
+    from typing import Any
+    target_user_id = str(discord_user_id).strip() if discord_user_id else None
+    auc_id_str = str(getattr(auction, "id", "test"))
+
+    logger.info("[WINNER_DM] Starting winner DM (is_test=%s, auction_id=%s, target=%s)", is_test, auc_id_str, target_user_id)
+
+    if not target_user_id:
+        err_msg = "Missing or invalid target Discord user ID"
+        logger.error("[WINNER_DM] %s for auction %s", err_msg, auc_id_str)
+        if return_detail:
+            return False, err_msg
+        return False
+
+    try:
+        uid_int = int(target_user_id)
+    except (ValueError, TypeError):
+        err_msg = f"Target Discord user ID '{target_user_id}' is not a valid integer"
+        logger.error("[WINNER_DM] %s for auction %s", err_msg, auc_id_str)
+        if return_detail:
+            return False, err_msg
+        return False
+
+    dm_key = f"winner_dm:{auc_id_str}:{uid_int}"
+    source_key = f"{auc_id_str}:{uid_int}"[:64]
+
+    if not is_test and auc_id_str != "test":
+        if dm_key in _SENT_WINNER_DMS:
+            logger.info("[WINNER_DM] Winner DM already sent for auction %s to %s. Skipping duplicate.", auc_id_str, uid_int)
+            if return_detail:
+                return True, "Winner DM already sent (idempotent duplicate skipped)"
+            return False
+
+        try:
+            with session_scope() as session:
+                ch_service = ChannelService(session)
+                pub_rec = ch_service.get_published_message(
+                    guild_id="dm",
+                    feature_type="WINNER_DM",
+                    source_id=source_key,
+                )
+                if pub_rec:
+                    _SENT_WINNER_DMS.add(dm_key)
+                    logger.info("[WINNER_DM] Winner DM already recorded in DB for auction %s to %s. Skipping duplicate.", auc_id_str, uid_int)
+                    if return_detail:
+                        return True, "Winner DM already recorded in DB (idempotent duplicate skipped)"
+                    return False
+        except Exception as db_chk_err:
+            logger.warning("[WINNER_DM] Idempotency DB check failed: %s (continuing send)", db_chk_err)
+
+    project_title = (
+        getattr(auction, "preview_x_display_name", None)
+        or getattr(auction, "title", None)
+        or getattr(auction, "reward_title", None)
+        or "Whitelist Auction"
+    )
+
+    raw_type = getattr(auction, "auction_type", "GTD")
+    type_str = (raw_type.value if hasattr(raw_type, "value") else str(raw_type or "GTD")).upper()
+
+    embed = discord.Embed(
+        title="🎉 CONGRATULATIONS!",
+        description=f"You have won the auction for **{project_title} ({type_str})**!",
+        color=COLOR_GOLD,
+    )
+
+    banner_url = (
+        getattr(auction, "preview_image_url", None)
+        or getattr(auction, "preview_x_banner_url", None)
+        or getattr(auction, "image_url", None)
+    )
+    if banner_url and isinstance(banner_url, str):
+        clean_url = banner_url.strip()
+        if "pbs.twimg.com" in clean_url and "name=orig" in clean_url:
+            clean_url = clean_url.replace("name=orig", "name=large")
+        if (clean_url.startswith("http://") or clean_url.startswith("https://")) and not any(ch in clean_url for ch in ["\r", "\n", " "]):
+            embed.set_image(url=clean_url)
+
+    # Reliable Discord User Resolution
+    user = None
+    if hasattr(bot, "get_user"):
+        user = bot.get_user(uid_int)
+
+    if not user and hasattr(bot, "guilds"):
+        for g in bot.guilds:
+            m = g.get_member(uid_int)
+            if m:
+                user = m
+                break
+
+    if not user and hasattr(bot, "fetch_user"):
+        try:
+            res = bot.fetch_user(uid_int)
+            user = await res if inspect.isawaitable(res) else res
+        except discord.NotFound:
+            err_msg = f"Discord user ID {uid_int} was not found (404 NotFound)"
+            logger.error("[WINNER_DM] User resolution failed: %s", err_msg)
+            if return_detail:
+                return False, err_msg
+            return False
+        except discord.HTTPException as http_err:
+            err_msg = f"Discord API error fetching user {uid_int}: {http_err.text or str(http_err)}"
+            logger.error("[WINNER_DM] User resolution HTTPException for %s: %s", uid_int, http_err)
+            if return_detail:
+                return False, err_msg
+            return False
+        except Exception as u_err:
+            err_msg = f"Unexpected error resolving user {uid_int}: {str(u_err)}"
+            logger.error("[WINNER_DM] %s", err_msg)
+            if return_detail:
+                return False, err_msg
+            return False
+
+    if not user:
+        err_msg = f"Could not resolve Discord user ID {uid_int} via cache or API"
+        logger.error("[WINNER_DM] %s", err_msg)
+        if return_detail:
+            return False, err_msg
+        return False
+
+    logger.info("[WINNER_DM] Attempting DM send to user %s", getattr(user, "id", uid_int))
+    try:
+        send_coro = user.send(embed=embed)
+        if inspect.isawaitable(send_coro):
+            await send_coro
+        logger.info("[WINNER_DM] Winner DM sent successfully to user %s for auction %s", getattr(user, "id", uid_int), auc_id_str)
+
+        if not is_test and auc_id_str != "test":
+            _SENT_WINNER_DMS.add(dm_key)
+            try:
+                with session_scope() as session:
+                    ch_service = ChannelService(session)
+                    ch_service.record_published_message(
+                        guild_id="dm",
+                        feature_type="WINNER_DM",
+                        channel_id=str(uid_int),
+                        message_id="sent",
+                        source_id=source_key,
+                    )
+            except Exception as rec_err:
+                logger.warning("[WINNER_DM] Could not record WINNER_DM in DB: %s", rec_err)
+
+        if return_detail:
+            return True, "DM sent successfully"
+        return True
+
+    except discord.Forbidden as f_err:
+        err_msg = "User has DMs closed or has blocked the bot (Forbidden 50007)"
+        logger.error("[WINNER_DM] DM delivery failed: User %s has DMs closed or blocked: %s", uid_int, f_err)
+        if not is_test and auc_id_str != "test":
+            _SENT_WINNER_DMS.add(dm_key)
+            try:
+                with session_scope() as session:
+                    ch_service = ChannelService(session)
+                    ch_service.record_published_message(
+                        guild_id="dm",
+                        feature_type="WINNER_DM",
+                        channel_id=str(uid_int),
+                        message_id="forbidden",
+                        source_id=source_key,
+                    )
+            except Exception:
+                pass
+        if return_detail:
+            return False, err_msg
+        return False
+
+    except discord.HTTPException as http_err:
+        err_msg = f"Discord HTTPException sending DM: {http_err.text or str(http_err)}"
+        logger.error("[WINNER_DM] DM send HTTPException for user %s: %s", uid_int, http_err)
+        if return_detail:
+            return False, err_msg
+        return False
+
+    except Exception as send_err:
+        err_msg = f"Unexpected DM send failure: {str(send_err)}"
+        logger.error("[WINNER_DM] %s for user %s", err_msg, uid_int)
+        if return_detail:
+            return False, err_msg
+        return False
+
 
 
 async def send_approval_dm(

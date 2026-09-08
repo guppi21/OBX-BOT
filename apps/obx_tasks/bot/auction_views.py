@@ -466,6 +466,17 @@ class AuctionBrowserView(View):
                 embed.set_footer(text="✦ OBX WHITELIST AUCTIONS")
                 view = AuctionActionSuccessView()
                 await interaction.followup.send(embed=embed, view=view, ephemeral=True)
+
+                # Asynchronously send sweet & short winner DM
+                try:
+                    from apps.obx_tasks.bot.notification_service import send_auction_winner_dm
+                    await send_auction_winner_dm(
+                        bot=interaction.client,
+                        auction=refreshed_auc,
+                        discord_user_id=str(interaction.user.id),
+                    )
+                except Exception as dm_err:
+                    logger.warning("Could not send FCFS winner DM to %s: %s", interaction.user.id, dm_err)
             except AuctionError as exc:
                 await interaction.followup.send(f"❌ {exc.message}", ephemeral=True)
             except Exception as exc:

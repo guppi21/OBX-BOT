@@ -1037,6 +1037,14 @@ async def announce_auction_winners(
                     view=view,
                     allowed_mentions=discord.AllowedMentions.none(),
                 )
+                # Dispatch winner DMs
+                for w in winners:
+                    try:
+                        from apps.obx_tasks.bot.notification_service import send_auction_winner_dm
+                        await send_auction_winner_dm(bot=bot, auction=db_auc, discord_user_id=str(w.discord_user_id))
+                    except Exception as dm_err:
+                        logger.warning("Could not send winner DM to %s for auction %s: %s", getattr(w, "discord_user_id", "?"), db_auc.id, dm_err)
+
                 return True, f"✅ Winner announcement updated in {channel.mention}."
             except Exception as exc:
                 logger.warning("Could not edit previous winner announcement (%s), posting new: %s", pub_rec.message_id, exc)
@@ -1062,6 +1070,14 @@ async def announce_auction_winners(
                 await announce_auction(auction, guild, bot)
             except Exception as upd_err:
                 logger.warning("Could not update auction card after winner announcement: %s", upd_err)
+
+            # Dispatch winner DMs
+            for w in winners:
+                try:
+                    from apps.obx_tasks.bot.notification_service import send_auction_winner_dm
+                    await send_auction_winner_dm(bot=bot, auction=db_auc, discord_user_id=str(w.discord_user_id))
+                except Exception as dm_err:
+                    logger.warning("Could not send winner DM to %s for auction %s: %s", getattr(w, "discord_user_id", "?"), db_auc.id, dm_err)
 
             return True, f"✅ Winner announcement posted in {channel.mention}."
         except Exception as exc:
