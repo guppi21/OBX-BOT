@@ -44,12 +44,13 @@ def test_dashboard_view_structure_and_custom_ids():
 def test_admin_hub_view_structure_and_custom_ids():
     from apps.obx_tasks.bot.dashboard_views import OBXAdminHubView, create_admin_hub_embed
     admin_view = OBXAdminHubView()
-    assert len(admin_view.children) == 11
+    assert len(admin_view.children) == 12
     custom_ids = [item.custom_id for item in admin_view.children]
     assert "obx:admin:create_task" in custom_ids
     assert "obx:admin:manage_tasks" in custom_ids
     assert "obx:admin:review_queue" in custom_ids
     assert "obx:admin:create_auction" in custom_ids
+    assert "obx:admin:manage_auctions" in custom_ids
     assert "obx:admin:members" in custom_ids
     assert "obx:admin:grant_reward" in custom_ids
     assert "obx:admin:configure_channels" in custom_ids

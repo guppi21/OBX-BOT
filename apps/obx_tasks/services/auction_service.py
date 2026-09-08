@@ -431,6 +431,29 @@ class AuctionService:
         )
 
         if existing_bid:
+            if existing_bid.is_settled:
+                # User's previous bid was settled/refunded (e.g. outbid refund or withdrawn).
+                # No funds are currently locked for this bid, so lock the full new bid amount.
+                idem_key = f"auction_gtd_bid_rebid:{auction.id}:{discord_user_id}:{bid_amount}:{now.timestamp()}"
+                try:
+                    self.wallet_service.lock_funds(
+                        discord_user_id=discord_user_id,
+                        amount=bid_amount,
+                        reference_type=ReferenceType.AUCTION_BID,
+                        idempotency_key=idem_key,
+                    )
+                except OBXError as exc:
+                    raise AuctionError(f"Cannot place bid: {exc.message}")
+
+                existing_bid.bid_amount = bid_amount
+                existing_bid.is_settled = False
+                existing_bid.is_winner = None
+                existing_bid.updated_at = now
+                self.session.commit()
+                self.session.refresh(existing_bid)
+                logger.info("Re-placed GTD bid: User=%s, Auction=%s, New Bid=%d OBX", discord_user_id, auction.id, bid_amount)
+                return existing_bid
+
             if bid_amount == existing_bid.bid_amount:
                 return existing_bid
 
@@ -701,6 +724,52 @@ class AuctionService:
 
         logger.info("Cancelled auction %s by %s", auction.id, cancelled_by)
         return auction
+
+    def withdraw_outbid(self, auction_id: str | uuid.UUID, discord_user_id: str) -> int:
+        """Allow a bidder who is currently outside winning positions to withdraw their locked bid instantly."""
+        if not discord_user_id or not str(discord_user_id).strip():
+            raise AuctionError("Discord User ID is required.")
+
+        if isinstance(auction_id, str):
+            auction_id = uuid.UUID(auction_id)
+
+        stmt = select(Auction).where(Auction.id == auction_id).with_for_update()
+        auction = self.session.execute(stmt).scalar_one_or_none()
+        if not auction:
+            raise AuctionError(f"Auction '{auction_id}' not found.")
+
+        if auction.status != AuctionStatus.ACTIVE:
+            raise AuctionError(f"Auction is not active (current status: {auction.status.value}).")
+
+        bid = (
+            self.session.query(AuctionBid)
+            .filter_by(auction_id=auction.id, discord_user_id=str(discord_user_id))
+            .with_for_update()
+            .first()
+        )
+        if not bid:
+            raise AuctionError("You do not have a bid on this auction.")
+
+        if bid.is_settled:
+            raise AuctionError("Your bid has already been settled or refunded.")
+
+        standings = self.get_auction_standings(auction.id, discord_user_id=str(discord_user_id))
+        if standings.get("is_winning"):
+            raise AuctionError("You are currently in a winning position! Winning bids cannot be withdrawn while winning.")
+
+        refund_amount = bid.bid_amount
+        idem_key = f"auction_outbid_withdraw:{auction.id}:{discord_user_id}"
+        self.wallet_service.release_funds(
+            discord_user_id=str(discord_user_id),
+            amount=refund_amount,
+            reference_type=ReferenceType.AUCTION_REFUND,
+            idempotency_key=idem_key,
+        )
+        bid.is_settled = True
+        bid.is_winner = False
+        self.session.commit()
+        logger.info("Outbid user %s withdrew %d OBX from auction %s", discord_user_id, refund_amount, auction.id)
+        return refund_amount
 
     def grant_custom_reward(
         self,

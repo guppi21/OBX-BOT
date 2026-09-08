@@ -146,6 +146,13 @@ class OBXTaskBot(commands.Bot):
                 auc_id = custom_id.split("obx:auc_card:claim:")[1]
                 await self._handle_auc_card_claim(interaction, auc_id)
                 return
+            elif custom_id.startswith("obx:auc_card:withdraw:"):
+                from apps.obx_tasks.bot.permissions import check_raider_access
+                if not await check_raider_access(interaction):
+                    return
+                auc_id = custom_id.split("obx:auc_card:withdraw:")[1]
+                await self._handle_auc_card_withdraw(interaction, auc_id)
+                return
             # Dismiss reward celebration interaction
             elif custom_id.startswith("obx:celebrate:dismiss:"):
                 parts = custom_id.split(":")
@@ -229,6 +236,14 @@ class OBXTaskBot(commands.Bot):
             elif custom_id == "obx:admin:manage_tasks":
                 from apps.obx_tasks.bot.task_management_views import handle_admin_manage_tasks
                 await handle_admin_manage_tasks(interaction)
+                return
+            elif custom_id == "obx:admin:manage_auctions":
+                from apps.obx_tasks.bot.permissions import is_admin
+                if not is_admin(interaction):
+                    await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+                    return
+                from apps.obx_tasks.bot.auction_management_views import handle_admin_manage_auctions
+                await handle_admin_manage_auctions(interaction)
                 return
             elif custom_id.startswith("obx:mgmt:"):
                 from apps.obx_tasks.bot.task_management_views import handle_admin_mgmt_interaction
@@ -338,6 +353,12 @@ class OBXTaskBot(commands.Bot):
                     await interaction.followup.send("❌ Auction not found.", ephemeral=True)
                     return
                 standings = service.get_auction_standings(auc.id, discord_user_id=str(interaction.user.id))
+                user_bid_rec = (
+                    session.query(AuctionBid)
+                    .filter_by(auction_id=auc.id, discord_user_id=str(interaction.user.id))
+                    .first()
+                )
+                user_bid_settled = user_bid_rec.is_settled if user_bid_rec else False
 
             from apps.obx_tasks.bot.ui_theme import COLOR_GOLD
             from apps.obx_tasks.bot.auction_views import MEDALS
@@ -363,11 +384,26 @@ class OBXTaskBot(commands.Bot):
                     inline=False,
                 )
 
+            view = None
             if standings.get("user_bid_amount") is not None:
                 u_rank = standings["user_rank"]
                 u_bid = standings["user_bid_amount"]
                 is_win = standings["is_winning"]
-                status_text = "🟢 **Winning Position**" if is_win else f"🔴 **Outside Winning Positions** (Cutoff: `{standings['winning_cutoff']:,} OBX`)"
+                if is_win:
+                    status_text = "🟢 **Winning Position**"
+                elif user_bid_settled:
+                    status_text = f"🟡 **Outside Winning Positions** (Cutoff: `{standings['winning_cutoff']:,} OBX`) • 💸 *Bid Refunded to Wallet*"
+                else:
+                    status_text = f"🔴 **Outside Winning Positions** (Cutoff: `{standings['winning_cutoff']:,} OBX`)"
+                    if auc.status == AuctionStatus.ACTIVE:
+                        view = discord.ui.View()
+                        view.add_item(discord.ui.Button(
+                            label=f"Withdraw Refund ({u_bid:,} OBX)",
+                            style=discord.ButtonStyle.danger,
+                            emoji="💸",
+                            custom_id=f"obx:auc_card:withdraw:{auc.id}",
+                        ))
+
                 embed.add_field(
                     name="📍 Your Standing",
                     value=f"**Rank:** `#{u_rank}` • **Bid:** `{u_bid:,} OBX` • **Status:** {status_text}",
@@ -375,10 +411,40 @@ class OBXTaskBot(commands.Bot):
                 )
 
             embed.set_footer(text="Rankings update dynamically in real time • Pay-As-Bid")
-            await interaction.followup.send(embed=embed, ephemeral=True)
+            await interaction.followup.send(embed=embed, view=view, ephemeral=True)
         except Exception as exc:
             logger.error("Error viewing rankings from card: %s", exc)
             await interaction.followup.send("❌ Error fetching live rankings.", ephemeral=True)
+
+    async def _handle_auc_card_withdraw(self, interaction: discord.Interaction, auction_id: str):
+        try:
+            await interaction.response.defer(ephemeral=True)
+            auc_uuid = auction_id if isinstance(auction_id, uuid.UUID) else uuid.UUID(str(auction_id))
+            with session_scope() as session:
+                service = AuctionService(session)
+                refund_amount = service.withdraw_outbid(auc_uuid, str(interaction.user.id))
+                refreshed_auc = service.get_auction(auc_uuid)
+
+            # Update public notification card in place
+            try:
+                if interaction.guild:
+                    from apps.obx_tasks.bot.announcement_service import announce_auction
+                    await announce_auction(refreshed_auc, interaction.guild, self)
+            except Exception as ann_err:
+                logger.warning("Could not refresh auction card on withdraw: %s", ann_err)
+
+            embed = discord.Embed(
+                title="💸 Bid Refunded Successfully!",
+                description=(
+                    f"Your locked bid of **{refund_amount:,} OBX** on **{refreshed_auc.title}** has been instantly returned to your available balance.\n\n"
+                    "You can place a new higher bid anytime to regain a winning spot!"
+                ),
+                color=discord.Color.green(),
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as exc:
+            logger.error("Error withdrawing outbid bid: %s", exc)
+            await interaction.followup.send(f"❌ Could not withdraw bid: {str(exc)}", ephemeral=True)
 
     async def _handle_auc_card_claim(self, interaction: discord.Interaction, auction_id: str):
         try:
@@ -498,6 +564,17 @@ class OBXTaskBot(commands.Bot):
                         session.delete(rec)
             except Exception as celeb_cleanup_err:
                 logger.debug("Celebration cleanup error: %s", celeb_cleanup_err)
+
+            # 4. Periodic live leaderboard refresh across all guilds
+            try:
+                from apps.obx_tasks.bot.announcement_service import deploy_or_update_leaderboard
+                for guild in self.guilds:
+                    try:
+                        await deploy_or_update_leaderboard(guild, self)
+                    except Exception as lb_err:
+                        logger.debug("Periodic leaderboard refresh error for guild %s: %s", guild.id, lb_err)
+            except Exception as lb_loop_err:
+                logger.debug("Leaderboard maintenance loop error: %s", lb_loop_err)
 
             await asyncio.sleep(60)
 
@@ -1551,6 +1628,15 @@ def create_discord_bot() -> OBXTaskBot:
                         )
                     except Exception as notif_err:
                         logger.error("[DM] Could not send approval DM from slash command: %s\n%s", notif_err, traceback.format_exc())
+
+                    # Auto-refresh leaderboard embed
+                    if interaction.guild:
+                        try:
+                            from apps.obx_tasks.bot.announcement_service import deploy_or_update_leaderboard
+                            import asyncio
+                            asyncio.create_task(deploy_or_update_leaderboard(interaction.guild, bot))
+                        except Exception as lb_err:
+                            logger.debug("Leaderboard auto-update on approval slash command skipped: %s", lb_err)
                 else:
                     if not reason or not reason.strip():
                         await interaction.followup.send("❌ Rejection reason is required when rejecting a submission.", ephemeral=True)

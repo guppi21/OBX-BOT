@@ -411,3 +411,89 @@ def test_grant_custom_reward_creates_ledger_record(db_session):
     _, w, _ = ws.get_or_create_user("reward_winner_1")
     assert w.available_balance == 750
     assert w.total_balance == 750
+
+
+def test_withdraw_outbid_instant_refund_and_rejection_for_winners(db_session):
+    ws = WalletService(db_session)
+    service = AuctionService(db_session)
+
+    # 1 slot auction
+    auc = service.create_auction(
+        title="1 Spot Auction",
+        reward_title="Solo Spot",
+        description="Only top 1 wins",
+        auction_type=AuctionType.GTD,
+        total_slots=1,
+        price_or_min_bid=100,
+        created_by="admin_1",
+    )
+
+    ws.get_or_create_user("bidder_a")
+    ws.credit("bidder_a", 1000, "test", "init_a")
+    ws.get_or_create_user("bidder_b")
+    ws.credit("bidder_b", 1000, "test", "init_b")
+
+    # A bids 200 (Rank 1, winning)
+    service.place_or_update_gtd_bid(auc.id, "bidder_a", 200)
+
+    # B bids 500 (Rank 1, winning) -> A is now rank 2 (outbid/losing)
+    service.place_or_update_gtd_bid(auc.id, "bidder_b", 500)
+
+    # Winner B cannot withdraw
+    with pytest.raises(AuctionError, match="currently in a winning position"):
+        service.withdraw_outbid(auc.id, "bidder_b")
+
+    # Outbid A can withdraw instantly
+    refunded = service.withdraw_outbid(auc.id, "bidder_a")
+    assert refunded == 200
+
+    # Bidder A wallet has 200 refunded to available
+    _, wa, _ = ws.get_or_create_user("bidder_a")
+    assert wa.available_balance == 1000
+    assert wa.locked_balance == 0
+
+    # Bidder A trying to withdraw again is rejected
+    with pytest.raises(AuctionError, match="already been settled or refunded"):
+        service.withdraw_outbid(auc.id, "bidder_a")
+
+
+def test_rebid_after_withdrawal_locks_full_bid(db_session):
+    ws = WalletService(db_session)
+    service = AuctionService(db_session)
+
+    auc = service.create_auction(
+        title="Rebid Auction",
+        reward_title="Pass",
+        description="Testing re-bid",
+        auction_type=AuctionType.GTD,
+        total_slots=1,
+        price_or_min_bid=100,
+        created_by="admin_1",
+    )
+
+    ws.get_or_create_user("rebid_user")
+    ws.credit("rebid_user", 1000, "test", "rb_init")
+    ws.get_or_create_user("rival_user")
+    ws.credit("rival_user", 1000, "test", "rv_init")
+
+    # 1. User bids 200
+    service.place_or_update_gtd_bid(auc.id, "rebid_user", 200)
+    # 2. Rival bids 400
+    service.place_or_update_gtd_bid(auc.id, "rival_user", 400)
+
+    # 3. User withdraws their 200
+    service.withdraw_outbid(auc.id, "rebid_user")
+    _, w, _ = ws.get_or_create_user("rebid_user")
+    assert w.available_balance == 1000
+    assert w.locked_balance == 0
+
+    # 4. User re-bids 600 -> must lock full 600 (not delta)
+    new_bid = service.place_or_update_gtd_bid(auc.id, "rebid_user", 600)
+    assert new_bid.bid_amount == 600
+    assert new_bid.is_settled is False
+
+    db_session.refresh(w)
+    assert w.available_balance == 400
+    assert w.locked_balance == 600
+    assert w.total_balance == 1000
+

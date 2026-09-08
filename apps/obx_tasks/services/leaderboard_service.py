@@ -3,7 +3,7 @@ from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import List, Optional, Tuple, NamedTuple, Dict, Any
 from dataclasses import dataclass
-from sqlalchemy import select, func, desc, asc, and_
+from sqlalchemy import select, func, desc, asc, and_, or_
 from sqlalchemy.orm import Session
 
 from packages.database.models.user import User
@@ -115,16 +115,14 @@ class LeaderboardService:
             user_id = row[0]
             bal = int(row[1])
 
-            # Get approved task earnings and completions for user
-            earnings, count = self._get_user_approved_task_stats(user_id)
             entries.append(
                 LeaderboardEntry(
                     rank=idx,
                     discord_user_id=user_id,
                     score=bal,
                     total_balance=bal,
-                    task_earnings=earnings,
-                    tasks_completed=count,
+                    task_earnings=0,
+                    tasks_completed=0,
                 )
             )
 
@@ -308,10 +306,58 @@ class LeaderboardService:
         period: LeaderboardPeriod = LeaderboardPeriod.ALL_TIME,
     ) -> UserLeaderboardPosition:
         """Calculate the exact global position and summary stats for a specific user."""
-        bal = self._get_user_total_balance(discord_user_id)
         earnings, count = self._get_user_approved_task_stats(discord_user_id, period=period)
 
-        # Full leaderboard for category to find exact rank
+        if category == LeaderboardCategory.TOTAL_OBX:
+            user = self.session.query(User).filter_by(discord_user_id=str(discord_user_id)).first()
+            user_bal = 0
+            user_rank = None
+            if user and user.wallet:
+                user_bal = (user.wallet.available_balance or 0) + (user.wallet.locked_balance or 0)
+
+            total_participants = (
+                self.session.query(func.count(Wallet.id))
+                .filter((Wallet.available_balance + Wallet.locked_balance) > 0)
+                .scalar()
+                or 0
+            )
+
+            if user_bal > 0 and user:
+                tot = Wallet.available_balance + Wallet.locked_balance
+                tie_filter = and_(
+                    User.discord_user_id != str(discord_user_id),
+                    or_(
+                        tot > user_bal,
+                        and_(
+                            tot == user_bal,
+                            or_(
+                                User.created_at < user.created_at,
+                                and_(User.created_at == user.created_at, User.id < user.id),
+                            ),
+                        ),
+                    ),
+                )
+                higher_count = (
+                    self.session.query(func.count(Wallet.id))
+                    .join(User, User.id == Wallet.user_id)
+                    .filter(tot > 0, tie_filter)
+                    .scalar()
+                    or 0
+                )
+                user_rank = higher_count + 1
+
+            return UserLeaderboardPosition(
+                discord_user_id=str(discord_user_id),
+                rank=user_rank,
+                score=user_bal,
+                total_balance=user_bal,
+                task_earnings=earnings,
+                tasks_completed=count,
+                total_participants=total_participants,
+            )
+
+        # Fallback for other categories (TASK_EARNINGS, etc.)
+        bal = self._get_user_total_balance(discord_user_id)
         all_entries, total_participants = self.get_leaderboard(
             category=category,
             period=period,
@@ -328,9 +374,7 @@ class LeaderboardService:
                 break
 
         if user_score == 0:
-            if category == LeaderboardCategory.TOTAL_OBX:
-                user_score = bal
-            elif category == LeaderboardCategory.TASK_EARNINGS:
+            if category == LeaderboardCategory.TASK_EARNINGS:
                 user_score = earnings
             elif category == LeaderboardCategory.TASK_COMPLETIONS:
                 user_score = count

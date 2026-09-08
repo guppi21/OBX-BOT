@@ -641,6 +641,14 @@ class OBXAdminHubView(View):
         modal = AdminCreateAuctionModal()
         await interaction.response.send_modal(modal)
 
+    @discord.ui.button(label="Manage Auctions", style=discord.ButtonStyle.primary, custom_id="obx:admin:manage_auctions", row=0)
+    async def manage_auctions_btn(self, interaction: discord.Interaction, button: Button):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
+        from apps.obx_tasks.bot.auction_management_views import handle_admin_manage_auctions
+        await handle_admin_manage_auctions(interaction)
+
     @discord.ui.button(label="Raiders", style=discord.ButtonStyle.primary, custom_id="obx:admin:members", row=1)
     async def members_btn(self, interaction: discord.Interaction, button: Button):
         if not is_admin(interaction):
@@ -1070,6 +1078,14 @@ class AdminReviewQueueView(View):
                     ),
                     color=COLOR_GREEN,
                 )
+
+                # Auto-refresh leaderboard embed in real time
+                try:
+                    import asyncio
+                    from apps.obx_tasks.bot.announcement_service import deploy_or_update_leaderboard
+                    asyncio.create_task(deploy_or_update_leaderboard(interaction.guild, interaction.client))
+                except Exception as lb_err:
+                    logger.debug("Leaderboard auto-update on approval skipped: %s", lb_err)
 
             # Remove from active queue
             self.submissions.pop(self.current_index)

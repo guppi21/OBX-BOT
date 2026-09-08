@@ -1192,6 +1192,14 @@ class AdminGrantRewardModal(Modal, title="🎁 GRANT CUSTOM REWARD"):
                             color=COLOR_GOLD,
                         )
                         await member.send(embed=dm_embed)
+
+                    # Auto-refresh leaderboard embed
+                    try:
+                        import asyncio
+                        from apps.obx_tasks.bot.announcement_service import deploy_or_update_leaderboard
+                        asyncio.create_task(deploy_or_update_leaderboard(guild, interaction.client))
+                    except Exception as lb_err:
+                        logger.debug("Leaderboard auto-update on reward grant skipped: %s", lb_err)
             except Exception:
                 pass
         except AuctionError as exc:
