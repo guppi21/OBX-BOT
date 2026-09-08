@@ -155,15 +155,25 @@ def build_auction_notification_embed(
         body_lines.append("")
 
         ranked_bids = standings.get("ranked_bids", []) if standings else []
-        if ranked_bids:
-            medals = ["🥇", "🥈", "🥉"]
-            for idx, b in enumerate(ranked_bids[:5]):
-                medal = medals[idx] if idx < 3 else f"{idx + 1}."
-                bid_amt = getattr(b, "bid_amount", 0)
-                u_id = getattr(b, "discord_user_id", "User")
-                body_lines.append(f"{medal} <@{u_id}> — **{bid_amt:,} OBX**")
-        else:
+        total_slots = getattr(auction, "total_slots", 1) or 1
+        display_slots = min(total_slots, 10)
+        medals = ["🥇", "🥈", "🥉"]
+
+        if not ranked_bids:
             body_lines.append("*No bids placed yet. Be the first!*")
+        else:
+            for idx in range(display_slots):
+                medal = medals[idx] if idx < 3 else f"{idx + 1}."
+                if idx < len(ranked_bids):
+                    b = ranked_bids[idx]
+                    bid_amt = getattr(b, "bid_amount", 0)
+                    u_id = getattr(b, "discord_user_id", "User")
+                    body_lines.append(f"{medal} <@{u_id}> — **{bid_amt:,} OBX**")
+                else:
+                    body_lines.append(f"{medal} *Open Spot — Min bid {auction.price_or_min_bid:,} OBX*")
+
+            if total_slots > display_slots:
+                body_lines.append(f"*...and {total_slots - display_slots} more winning spots*")
 
     embed = discord.Embed(
         title=header_title,

@@ -275,26 +275,13 @@ async def test_raider_outbid_rankings_shows_withdraw_button_and_withdrawing_refu
     rank_view = rank_call_kw.get("view")
 
     assert "Outside Winning Positions" in [f.value for f in rank_embed.fields if f.name == "📍 Your Standing"][0]
-    assert rank_view is not None
-    assert any("Withdraw Refund" in getattr(btn, "label", "") for btn in rank_view.children)
+    assert "Bid Refunded to Wallet" in [f.value for f in rank_embed.fields if f.name == "📍 Your Standing"][0]
+    assert rank_view is None
 
-    # 2. User clicks Withdraw Refund button
-    inter_withdraw = make_mock_interaction(is_done=False)
-    inter_withdraw.user.id = "outbid_user"
-    inter_withdraw.guild = None
-    inter_withdraw.followup.send = AsyncMock()
-
-    with patch("apps.obx_tasks.bot.client.session_scope", lambda: mock_session_scope_for(db_session)):
-        await OBXTaskBot._handle_auc_card_withdraw(bot, inter_withdraw, str(auc.id))
-
-    # Verify wallet funds were released back to available instantly
+    # Verify wallet funds were auto-released back to available instantly upon being displaced
     _, w_outbid, _ = ws.get_or_create_user("outbid_user")
     assert w_outbid.available_balance == 1000
     assert w_outbid.locked_balance == 0
-
-    assert inter_withdraw.followup.send.called
-    withdraw_embed = inter_withdraw.followup.send.call_args[1]["embed"]
-    assert "Refunded Successfully" in withdraw_embed.title
 
 
 @pytest.mark.asyncio

@@ -452,6 +452,7 @@ class AuctionService:
                 self.session.commit()
                 self.session.refresh(existing_bid)
                 logger.info("Re-placed GTD bid: User=%s, Auction=%s, New Bid=%d OBX", discord_user_id, auction.id, bid_amount)
+                self._auto_refund_displaced_bidders(auction)
                 return existing_bid
 
             if bid_amount == existing_bid.bid_amount:
@@ -489,6 +490,7 @@ class AuctionService:
             self.session.commit()
             self.session.refresh(existing_bid)
             logger.info("Updated GTD bid: User=%s, Auction=%s, New Bid=%d OBX", discord_user_id, auction.id, bid_amount)
+            self._auto_refund_displaced_bidders(auction)
             return existing_bid
         else:
             # First bid: Lock full bid amount
@@ -512,7 +514,46 @@ class AuctionService:
             self.session.commit()
             self.session.refresh(bid)
             logger.info("Placed new GTD bid: User=%s, Auction=%s, Amount=%d OBX", discord_user_id, auction.id, bid_amount)
+            self._auto_refund_displaced_bidders(auction)
             return bid
+
+    def _auto_refund_displaced_bidders(self, auction: Auction):
+        """Automatically refund any bidder knocked out of the top winning spots."""
+        active_bids = (
+            self.session.query(AuctionBid)
+            .filter(AuctionBid.auction_id == auction.id, AuctionBid.is_settled.is_(False))
+            .order_by(
+                desc(AuctionBid.bid_amount),
+                asc(AuctionBid.updated_at),
+                asc(AuctionBid.discord_user_id),
+            )
+            .all()
+        )
+
+        total_slots = getattr(auction, "total_slots", 1) or 1
+        if len(active_bids) > total_slots:
+            displaced_bids = active_bids[total_slots:]
+            for d_bid in displaced_bids:
+                refund_amt = d_bid.bid_amount
+                upd_ts = d_bid.updated_at.timestamp() if d_bid.updated_at else 0
+                idem_key = f"auction_auto_displaced_refund:{auction.id}:{d_bid.discord_user_id}:{refund_amt}:{upd_ts}"
+                try:
+                    self.wallet_service.release_funds(
+                        discord_user_id=d_bid.discord_user_id,
+                        amount=refund_amt,
+                        reference_type=ReferenceType.AUCTION_REFUND,
+                        idempotency_key=idem_key,
+                    )
+                except Exception as exc:
+                    logger.error("Failed to auto-refund displaced bidder %s: %s", d_bid.discord_user_id, exc)
+                    continue
+                d_bid.is_settled = True
+                d_bid.is_winner = False
+                logger.info(
+                    "Auto-refunded displaced bidder %s (%d OBX) from auction %s",
+                    d_bid.discord_user_id, refund_amt, auction.id,
+                )
+            self.session.commit()
 
     def get_auction_standings(
         self,
@@ -611,7 +652,9 @@ class AuctionService:
 
             winner_count = min(len(bids), auction.total_slots)
             winners = bids[:winner_count]
-            losers = bids[winner_count:]
+            all_bids = self.session.query(AuctionBid).filter_by(auction_id=auction.id).all()
+            winning_ids = {w.id for w in winners}
+            losers = [b for b in all_bids if b.id not in winning_ids]
 
             # Settle Winners (Pay-As-Bid)
             for w_bid in winners:

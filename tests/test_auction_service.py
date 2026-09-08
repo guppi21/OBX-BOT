@@ -296,10 +296,11 @@ def test_auction_standings_and_winning_cutoff_calculation(db_session):
     assert standings_4["user_rank"] == 1
     assert standings_4["is_winning"] is True
     assert standings_4["winning_cutoff"] == 2000
+    assert standings_4["total_bidders"] == 3
 
-    # user_stand_1: rank #4 (1000 OBX), is_winning = False
+    # user_stand_1 was displaced below top 3 and auto-refunded immediately
     standings_1 = service.get_auction_standings(auc.id, discord_user_id="user_stand_1")
-    assert standings_1["user_rank"] == 4
+    assert standings_1["user_rank"] is None
     assert standings_1["is_winning"] is False
 
 
@@ -436,23 +437,19 @@ def test_withdraw_outbid_instant_refund_and_rejection_for_winners(db_session):
     # A bids 200 (Rank 1, winning)
     service.place_or_update_gtd_bid(auc.id, "bidder_a", 200)
 
-    # B bids 500 (Rank 1, winning) -> A is now rank 2 (outbid/losing)
+    # B bids 500 (Rank 1, winning) -> A is displaced below top 1 and auto-refunded immediately
     service.place_or_update_gtd_bid(auc.id, "bidder_b", 500)
 
     # Winner B cannot withdraw
     with pytest.raises(AuctionError, match="currently in a winning position"):
         service.withdraw_outbid(auc.id, "bidder_b")
 
-    # Outbid A can withdraw instantly
-    refunded = service.withdraw_outbid(auc.id, "bidder_a")
-    assert refunded == 200
-
-    # Bidder A wallet has 200 refunded to available
+    # Outbid A wallet already has 200 refunded to available automatically
     _, wa, _ = ws.get_or_create_user("bidder_a")
     assert wa.available_balance == 1000
     assert wa.locked_balance == 0
 
-    # Bidder A trying to withdraw again is rejected
+    # Bidder A trying to withdraw again is rejected as already settled/refunded
     with pytest.raises(AuctionError, match="already been settled or refunded"):
         service.withdraw_outbid(auc.id, "bidder_a")
 
@@ -478,16 +475,15 @@ def test_rebid_after_withdrawal_locks_full_bid(db_session):
 
     # 1. User bids 200
     service.place_or_update_gtd_bid(auc.id, "rebid_user", 200)
-    # 2. Rival bids 400
+    # 2. Rival bids 400 -> User is displaced and automatically refunded immediately
     service.place_or_update_gtd_bid(auc.id, "rival_user", 400)
 
-    # 3. User withdraws their 200
-    service.withdraw_outbid(auc.id, "rebid_user")
+    # User's wallet already has 200 refunded to available automatically
     _, w, _ = ws.get_or_create_user("rebid_user")
     assert w.available_balance == 1000
     assert w.locked_balance == 0
 
-    # 4. User re-bids 600 -> must lock full 600 (not delta)
+    # 3. User re-bids 600 -> must lock full 600 (not delta)
     new_bid = service.place_or_update_gtd_bid(auc.id, "rebid_user", 600)
     assert new_bid.bid_amount == 600
     assert new_bid.is_settled is False
@@ -550,5 +546,87 @@ def test_cancel_bid_instant_refund_and_removes_from_standings(db_session):
     # Bidder 1 attempting to cancel again raises error
     with pytest.raises(AuctionError, match="do not have an active bid"):
         service.cancel_bid(auc.id, "bidder_cancel_1")
+
+
+def test_auto_refund_displaced_bidders_3_spots(db_session):
+    """When an auction has 3 spots, only the top 3 bids remain active and any 4th bidder displaced is refunded immediately."""
+    ws = WalletService(db_session)
+    service = AuctionService(db_session)
+
+    auc = service.create_auction(
+        title="3-Spot Drop",
+        reward_title="Tier 1 WL",
+        description="Top 3 win",
+        auction_type=AuctionType.GTD,
+        total_slots=3,
+        price_or_min_bid=50,
+        created_by="admin_1",
+    )
+
+    for uid in ["u1", "u2", "u3", "u4"]:
+        ws.get_or_create_user(uid)
+        ws.credit(uid, 1000, "test", f"init_{uid}")
+
+    # Top 3 fill the spots: u1=300, u2=200, u3=100
+    service.place_or_update_gtd_bid(auc.id, "u1", 300)
+    service.place_or_update_gtd_bid(auc.id, "u2", 200)
+    service.place_or_update_gtd_bid(auc.id, "u3", 100)
+
+    # All 3 have locked funds
+    for uid, amt in [("u1", 300), ("u2", 200), ("u3", 100)]:
+        _, w, _ = ws.get_or_create_user(uid)
+        assert w.locked_balance == amt
+
+    # u4 places bid of 250 -> becomes rank #2, knocking u3 (100 OBX) out of the top 3!
+    service.place_or_update_gtd_bid(auc.id, "u4", 250)
+
+    # u3 is immediately refunded 100% of their 100 OBX!
+    _, w3, _ = ws.get_or_create_user("u3")
+    assert w3.available_balance == 1000
+    assert w3.locked_balance == 0
+
+    # Active standings has exactly 3 bidders: u1 (300), u4 (250), u2 (200)
+    standings = service.get_auction_standings(auc.id)
+    assert standings["total_bidders"] == 3
+    assert [b.discord_user_id for b in standings["ranked_bids"]] == ["u1", "u4", "u2"]
+
+
+def test_auto_refund_displaced_bidders_1_spot(db_session):
+    """When an auction has 1 spot, only the #1 top bid remains active and any displaced bidder is refunded immediately."""
+    ws = WalletService(db_session)
+    service = AuctionService(db_session)
+
+    auc = service.create_auction(
+        title="1-Spot Whale Drop",
+        reward_title="Solo Spot",
+        description="Top 1 wins",
+        auction_type=AuctionType.GTD,
+        total_slots=1,
+        price_or_min_bid=100,
+        created_by="admin_1",
+    )
+
+    ws.get_or_create_user("solo_1")
+    ws.credit("solo_1", 2000, "test", "init_s1")
+    ws.get_or_create_user("solo_2")
+    ws.credit("solo_2", 2000, "test", "init_s2")
+
+    # solo_1 bids 500
+    service.place_or_update_gtd_bid(auc.id, "solo_1", 500)
+    _, w1, _ = ws.get_or_create_user("solo_1")
+    assert w1.locked_balance == 500
+
+    # solo_2 outbids with 800 -> solo_1 is displaced and immediately refunded!
+    service.place_or_update_gtd_bid(auc.id, "solo_2", 800)
+
+    db_session.refresh(w1)
+    assert w1.available_balance == 2000
+    assert w1.locked_balance == 0
+
+    # Active standings has exactly 1 bidder: solo_2
+    standings = service.get_auction_standings(auc.id)
+    assert standings["total_bidders"] == 1
+    assert standings["ranked_bids"][0].discord_user_id == "solo_2"
+
 
 

@@ -107,6 +107,56 @@ def test_build_auction_notification_embed_gtd_and_fcfs(db_session):
     assert "<t:" in embed_fcfs.description and ":R>" in embed_fcfs.description
 
 
+def test_top_bids_embed_strictly_matches_slot_count(db_session):
+    """1-slot auction displays only top 1 bid; 3-slot auction displays top 3 bids."""
+    service = AuctionService(db_session)
+    ws = WalletService(db_session)
+
+    # 1. Test 1-slot auction
+    auc_1 = service.create_auction(
+        title="Single Spot Test",
+        reward_title="Solo WL",
+        description="Only 1 spot",
+        auction_type=AuctionType.GTD,
+        total_slots=1,
+        price_or_min_bid=50,
+        created_by="admin",
+    )
+    ws.get_or_create_user("user_solo")
+    ws.credit("user_solo", 500, "test", "init_solo")
+    service.place_or_update_gtd_bid(auc_1.id, "user_solo", 200)
+
+    standings_1 = service.get_auction_standings(auc_1.id)
+    embed_1 = build_auction_notification_embed(auc_1, standings=standings_1)
+
+    assert "🥇 <@user_solo> — **200 OBX**" in embed_1.description
+    assert "🥈" not in embed_1.description
+    assert "🥉" not in embed_1.description
+
+    # 2. Test 3-slot auction
+    auc_3 = service.create_auction(
+        title="Three Spot Test",
+        reward_title="Tri Spot WL",
+        description="Top 3 spots",
+        auction_type=AuctionType.GTD,
+        total_slots=3,
+        price_or_min_bid=50,
+        created_by="admin",
+    )
+    for idx, (uid, amt) in enumerate([("bidder_1", 300), ("bidder_2", 200), ("bidder_3", 100)]):
+        ws.get_or_create_user(uid)
+        ws.credit(uid, 500, "test", f"init_{uid}")
+        service.place_or_update_gtd_bid(auc_3.id, uid, amt)
+
+    standings_3 = service.get_auction_standings(auc_3.id)
+    embed_3 = build_auction_notification_embed(auc_3, standings=standings_3)
+
+    assert "🥇 <@bidder_1> — **300 OBX**" in embed_3.description
+    assert "🥈 <@bidder_2> — **200 OBX**" in embed_3.description
+    assert "🥉 <@bidder_3> — **100 OBX**" in embed_3.description
+    assert "4." not in embed_3.description
+
+
 def test_admin_duration_and_exact_utc_parsing():
     now = datetime.now(timezone.utc)
 

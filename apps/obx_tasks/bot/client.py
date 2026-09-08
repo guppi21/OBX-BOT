@@ -414,9 +414,9 @@ class OBXTaskBot(commands.Bot):
                 )
 
             view = None
-            if standings.get("user_bid_amount") is not None:
-                u_rank = standings["user_rank"]
-                u_bid = standings["user_bid_amount"]
+            if standings.get("user_bid_amount") is not None or user_bid_rec:
+                u_rank = standings.get("user_rank") if standings.get("user_rank") is not None else "Outbid"
+                u_bid = standings["user_bid_amount"] if standings.get("user_bid_amount") is not None else user_bid_rec.bid_amount
                 is_win = standings["is_winning"]
                 if is_win:
                     status_text = "🟢 **Winning Position**"
@@ -433,9 +433,10 @@ class OBXTaskBot(commands.Bot):
                             custom_id=f"obx:auc_card:withdraw:{auc.id}",
                         ))
 
+                rank_str = f"#{u_rank}" if isinstance(u_rank, int) else u_rank
                 embed.add_field(
                     name="📍 Your Standing",
-                    value=f"**Rank:** `#{u_rank}` • **Bid:** `{u_bid:,} OBX` • **Status:** {status_text}",
+                    value=f"**Rank:** `{rank_str}` • **Bid:** `{u_bid:,} OBX` • **Status:** {status_text}",
                     inline=False,
                 )
 
