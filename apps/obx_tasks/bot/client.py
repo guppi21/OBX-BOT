@@ -1021,9 +1021,16 @@ def create_discord_bot() -> OBXTaskBot:
             logger.error("Error in admin_grant_reward: %s", exc)
             await interaction.followup.send(f"❌ Error granting reward: {str(exc)}", ephemeral=True)
 
-    @bot.tree.command(name="admin-recover-from-logs", description="[Admin] Scan #obx-admin-logs history and auto-reconstruct user balances")
-    @app_commands.describe(limit="Number of past log messages to scan (default 500)")
-    async def admin_recover_from_logs_command(interaction: discord.Interaction, limit: int = 500):
+    @bot.tree.command(name="admin-recover-from-logs", description="[Admin] Scan message history in any channel and auto-reconstruct user balances")
+    @app_commands.describe(
+        channel="Optional channel to scan (defaults to configured Admin Logs channel or current channel)",
+        limit="Number of past messages to scan (default 500)"
+    )
+    async def admin_recover_from_logs_command(
+        interaction: discord.Interaction,
+        channel: Optional[discord.TextChannel] = None,
+        limit: int = 500,
+    ):
         if not is_admin(interaction):
             await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
             return
@@ -1034,51 +1041,97 @@ def create_discord_bot() -> OBXTaskBot:
                 await interaction.followup.send("❌ Must be executed in a guild.", ephemeral=True)
                 return
 
-            with session_scope() as session:
-                from apps.obx_tasks.services.channel_service import ChannelService
-                ch_s = ChannelService(session)
-                cfg = ch_s.get_or_create_guild_config(str(interaction.guild.id))
-                admin_ch_id = cfg.admin_channel_id
+            target_channel = channel
+            if not target_channel:
+                with session_scope() as session:
+                    from apps.obx_tasks.services.channel_service import ChannelService
+                    ch_s = ChannelService(session)
+                    cfg = ch_s.get_or_create_guild_config(str(interaction.guild.id))
+                    admin_ch_id = cfg.admin_channel_id
 
-            if not admin_ch_id:
-                await interaction.followup.send("❌ Admin log channel is not configured.", ephemeral=True)
-                return
+                if admin_ch_id:
+                    target_channel = interaction.guild.get_channel(int(admin_ch_id))
 
-            ch = interaction.guild.get_channel(int(admin_ch_id))
-            if not ch or not isinstance(ch, discord.TextChannel):
-                await interaction.followup.send(f"❌ Admin channel `{admin_ch_id}` not found.", ephemeral=True)
+            if not target_channel:
+                target_channel = interaction.channel
+
+            if not target_channel or not isinstance(target_channel, discord.TextChannel):
+                await interaction.followup.send("❌ Could not determine text channel to scan. Please specify `channel` parameter.", ephemeral=True)
                 return
 
             import re
             user_totals = {}
 
-            sub_user_pattern = re.compile(r"approved submission for <@(\d+)>", re.IGNORECASE)
+            # 1. Submission approval logs
+            sub_user_pattern = re.compile(r"approved submission for <@!?(\d+)>", re.IGNORECASE)
             sub_reward_pattern = re.compile(r"Reward Credited:\*\* `\+?([0-9,]+) OBX`", re.IGNORECASE)
-            custom_grant_pattern = re.compile(r"credited \*\*([0-9,]+) OBX\*\* to <@(\d+)>", re.IGNORECASE)
+
+            # 2. Custom reward logs
+            custom_grant_pattern = re.compile(r"credited \*\*([0-9,]+) OBX\*\* to <@!?(\d+)>", re.IGNORECASE)
+
+            # 3. Mention with OBX (e.g. from Auction rankings: `<@1344974194768740364> — 14 OBX` or `15 OBX`)
+            mention_obx_pattern = re.compile(r"<@!?(\d+)>[^\n\d]+([0-9,]+)\s*OBX", re.IGNORECASE)
+
+            # 4. Plain username matching against guild members for lines like `@Username — 15 OBX`
+            name_obx_pattern = re.compile(r"[@]([^\n—–\-]+?)\s*[—–\-]\s*([0-9,]+)\s*OBX", re.IGNORECASE)
 
             scanned_count = 0
-            async for msg in ch.history(limit=min(1000, max(10, limit))):
+            async for msg in target_channel.history(limit=min(1000, max(10, limit))):
                 scanned_count += 1
-                for emb in msg.embeds:
-                    desc = emb.description or ""
-                    m_sub = sub_user_pattern.search(desc)
+                texts_to_scan = [str(msg.content)] if getattr(msg, "content", None) else []
+                for emb in getattr(msg, "embeds", []):
+                    desc = getattr(emb, "description", None)
+                    if isinstance(desc, str) and desc:
+                        texts_to_scan.append(desc)
+                    fields = getattr(emb, "fields", None)
+                    if isinstance(fields, (list, tuple)):
+                        for fld in fields:
+                            val = getattr(fld, "value", None)
+                            if isinstance(val, str) and val:
+                                texts_to_scan.append(val)
+
+                for text in texts_to_scan:
+                    if not text:
+                        continue
+
+                    # 1. Submission approval
+                    m_sub = sub_user_pattern.search(text)
                     if m_sub:
                         u_id = m_sub.group(1)
-                        m_rew = sub_reward_pattern.search(desc)
+                        m_rew = sub_reward_pattern.search(text)
                         if m_rew:
                             amt = int(m_rew.group(1).replace(",", ""))
                             user_totals[u_id] = user_totals.get(u_id, 0) + amt
 
-                    m_cust = custom_grant_pattern.search(desc)
+                    # 2. Custom reward
+                    m_cust = custom_grant_pattern.search(text)
                     if m_cust:
                         amt = int(m_cust.group(1).replace(",", ""))
                         u_id = m_cust.group(2)
                         user_totals[u_id] = user_totals.get(u_id, 0) + amt
 
+                    # 3. Mentions with OBX (e.g. in auction cards)
+                    for m_mention, amt_str in mention_obx_pattern.findall(text):
+                        amt = int(amt_str.replace(",", ""))
+                        if amt > user_totals.get(m_mention, 0):
+                            user_totals[m_mention] = amt
+
+                    # 4. Username matching
+                    for raw_name, amt_str in name_obx_pattern.findall(text):
+                        amt = int(amt_str.replace(",", ""))
+                        clean_name = raw_name.strip().split()[0].lower()
+                        for member in interaction.guild.members:
+                            if clean_name in member.name.lower() or clean_name in member.display_name.lower():
+                                m_id = str(member.id)
+                                if amt > user_totals.get(m_id, 0):
+                                    user_totals[m_id] = amt
+                                break
+
             if not user_totals:
                 await interaction.followup.send(
-                    f"🔍 Scanned `{scanned_count}` messages in {ch.mention}, but found no approved reward logs.\n"
-                    "You can use `/admin-bulk-restore` to restore balances directly.",
+                    f"🔍 Scanned `{scanned_count}` messages in {target_channel.mention}, but found no logs or member OBX records.\n\n"
+                    "💡 **Tip**: You can use `/admin-bulk-restore` to restore balances directly, for example:\n"
+                    "`/admin-bulk-restore entries: <@1344974194768740364> 14, <@1298929333213073451> 10, @user 15`",
                     ephemeral=True,
                 )
                 return
@@ -1110,7 +1163,7 @@ def create_discord_bot() -> OBXTaskBot:
             embed = discord.Embed(
                 title="♻️ Balances Reconstructed from Admin Logs",
                 description=(
-                    f"Successfully scanned `{scanned_count}` log messages in {ch.mention}!\n\n"
+                    f"Successfully scanned `{scanned_count}` log messages in {target_channel.mention}!\n\n"
                     f"👥 **Users Restored**: `{len(user_totals)}`\n"
                     f"💰 **Total OBX Re-Credited**: `{total_restored_obx:,} OBX`\n\n"
                     f"**Restored Members:**\n{summary_text}\n\n"
