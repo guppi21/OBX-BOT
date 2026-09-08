@@ -497,3 +497,58 @@ def test_rebid_after_withdrawal_locks_full_bid(db_session):
     assert w.locked_balance == 600
     assert w.total_balance == 1000
 
+
+def test_cancel_bid_instant_refund_and_removes_from_standings(db_session):
+    """Cancelling a bid instantly refunds locked OBX and removes user from active standings."""
+    ws = WalletService(db_session)
+    service = AuctionService(db_session)
+
+    auc = service.create_auction(
+        title="Cancel Bid Test Auction",
+        reward_title="Whitelisted Spot",
+        description="Testing bid cancellation",
+        auction_type=AuctionType.GTD,
+        total_slots=2,
+        price_or_min_bid=50,
+        created_by="admin_1",
+    )
+
+    ws.get_or_create_user("bidder_cancel_1")
+    ws.credit("bidder_cancel_1", 500, "test", "init_c1")
+    ws.get_or_create_user("bidder_cancel_2")
+    ws.credit("bidder_cancel_2", 500, "test", "init_c2")
+
+    # Both place bids
+    service.place_or_update_gtd_bid(auc.id, "bidder_cancel_1", 200)
+    service.place_or_update_gtd_bid(auc.id, "bidder_cancel_2", 150)
+
+    # Check standings: 2 bidders
+    standings = service.get_auction_standings(auc.id)
+    assert standings["total_bidders"] == 2
+    assert len(standings["ranked_bids"]) == 2
+
+    # Verify wallet before cancel: 300 available, 200 locked
+    _, w1, _ = ws.get_or_create_user("bidder_cancel_1")
+    assert w1.available_balance == 300
+    assert w1.locked_balance == 200
+
+    # Bidder 1 cancels their bid
+    refunded = service.cancel_bid(auc.id, "bidder_cancel_1")
+    assert refunded == 200
+
+    # Wallet has full 500 available, 0 locked
+    db_session.refresh(w1)
+    assert w1.available_balance == 500
+    assert w1.locked_balance == 0
+    assert w1.total_balance == 500
+
+    # Standings now only has bidder 2
+    standings_after = service.get_auction_standings(auc.id)
+    assert standings_after["total_bidders"] == 1
+    assert standings_after["ranked_bids"][0].discord_user_id == "bidder_cancel_2"
+
+    # Bidder 1 attempting to cancel again raises error
+    with pytest.raises(AuctionError, match="do not have an active bid"):
+        service.cancel_bid(auc.id, "bidder_cancel_1")
+
+

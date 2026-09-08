@@ -288,17 +288,17 @@ def test_editing_x_url_updates_auction_and_refreshes_preview(db_session):
     assert updated_preview.preview_x_banner_url == "https://img.com/banner.png"
 
 
-def test_ranked_auction_retains_bid_edit_bid_my_bid_buttons():
-    """Ranked GTD auctions have exactly [ 💎 BID ], [ ✏️ EDIT BID ], and [ 📍 MY BID ]."""
+def test_ranked_auction_retains_bid_cancel_bid_my_bid_buttons():
+    """Ranked GTD auctions have exactly [ 💰 BID ], [ ❌ CANCEL BID ], and [ 📍 MY BID ]."""
     auc_id = str(uuid.uuid4())
     view = AuctionNotificationCardView(auction_id=auc_id, is_active=True, is_fcfs=False)
 
     labels = [b.label for b in view.children if hasattr(b, "label")]
-    assert labels == ["BID", "EDIT BID", "MY BID"]
+    assert labels == ["BID", "CANCEL BID", "MY BID"]
 
     custom_ids = [b.custom_id for b in view.children if hasattr(b, "custom_id")]
     assert f"obx:auc_card:bid:{auc_id}" in custom_ids
-    assert f"obx:auc_card:edit_bid:{auc_id}" in custom_ids
+    assert f"obx:auc_card:cancel_bid:{auc_id}" in custom_ids
     assert f"obx:auc_card:rankings:{auc_id}" in custom_ids
     assert not any("claim" in cid for cid in custom_ids)
 

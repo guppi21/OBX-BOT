@@ -132,6 +132,27 @@ class OBXTaskBot(commands.Bot):
                 auc_id = custom_id.split("obx:auc_card:edit_bid:")[1]
                 await self._handle_auc_card_bid(interaction, auc_id)
                 return
+            elif custom_id.startswith("obx:auc_card:cancel_bid:"):
+                from apps.obx_tasks.bot.permissions import check_raider_access
+                if not await check_raider_access(interaction):
+                    return
+                auc_id = custom_id.split("obx:auc_card:cancel_bid:")[1]
+                await self._handle_auc_card_cancel_bid(interaction, auc_id)
+                return
+            elif custom_id.startswith("obx:auc_card:confirm_cancel:"):
+                from apps.obx_tasks.bot.permissions import check_raider_access
+                if not await check_raider_access(interaction):
+                    return
+                auc_id = custom_id.split("obx:auc_card:confirm_cancel:")[1]
+                await self._handle_auc_card_confirm_cancel(interaction, auc_id)
+                return
+            elif custom_id.startswith("obx:auc_card:keep_bid:"):
+                await interaction.response.edit_message(
+                    content="ℹ️ Bid kept. Your bid remains active in the auction.",
+                    embed=None,
+                    view=None,
+                )
+                return
             elif custom_id.startswith("obx:auc_card:rankings:"):
                 from apps.obx_tasks.bot.permissions import check_raider_access
                 if not await check_raider_access(interaction):
@@ -453,6 +474,86 @@ class OBXTaskBot(commands.Bot):
         except Exception as exc:
             logger.error("Error withdrawing outbid bid: %s", exc)
             await interaction.followup.send(f"❌ Could not withdraw bid: {str(exc)}", ephemeral=True)
+
+    async def _handle_auc_card_cancel_bid(self, interaction: discord.Interaction, auction_id: str):
+        try:
+            auc_uuid = auction_id if isinstance(auction_id, uuid.UUID) else uuid.UUID(str(auction_id))
+            with session_scope() as session:
+                auc = session.query(Auction).filter_by(id=auc_uuid).first()
+                if not auc or auc.status != AuctionStatus.ACTIVE:
+                    await interaction.response.send_message("❌ This auction is no longer active.", ephemeral=True)
+                    return
+
+                bid = (
+                    session.query(AuctionBid)
+                    .filter_by(auction_id=auc.id, discord_user_id=str(interaction.user.id))
+                    .first()
+                )
+                if not bid or bid.is_settled:
+                    await interaction.response.send_message("❌ You do not have an active bid on this auction to cancel.", ephemeral=True)
+                    return
+
+                bid_amount = bid.bid_amount
+                auc_title = auc.title
+
+            embed = discord.Embed(
+                title="⚠️ Confirm Bid Cancellation & Instant Refund",
+                description=(
+                    f"Are you sure you want to cancel your bid on **{auc_title}**?\n\n"
+                    f"• 💰 **Locked Bid:** `{bid_amount:,} OBX`\n"
+                    f"• 💸 **Instant Refund:** `+{bid_amount:,} OBX` will be returned to your wallet immediately.\n"
+                    "• ❌ Your standing will be removed from the auction leaderboard."
+                ),
+                color=discord.Color.red(),
+            )
+            view = discord.ui.View()
+            view.add_item(discord.ui.Button(
+                label=f"Confirm Cancel & Refund ({bid_amount:,} OBX)",
+                style=discord.ButtonStyle.danger,
+                emoji="💸",
+                custom_id=f"obx:auc_card:confirm_cancel:{auc_uuid}",
+            ))
+            view.add_item(discord.ui.Button(
+                label="Keep Bid",
+                style=discord.ButtonStyle.secondary,
+                emoji="✖️",
+                custom_id=f"obx:auc_card:keep_bid:{auc_uuid}",
+            ))
+            await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        except Exception as exc:
+            logger.error("Error initiating cancel bid: %s", exc)
+            if not _is_response_done(interaction):
+                await interaction.response.send_message("❌ Failed to initiate bid cancellation.", ephemeral=True)
+
+    async def _handle_auc_card_confirm_cancel(self, interaction: discord.Interaction, auction_id: str):
+        try:
+            await interaction.response.defer(ephemeral=True)
+            auc_uuid = auction_id if isinstance(auction_id, uuid.UUID) else uuid.UUID(str(auction_id))
+            with session_scope() as session:
+                service = AuctionService(session)
+                refund_amount = service.cancel_bid(auc_uuid, str(interaction.user.id))
+                refreshed_auc = service.get_auction(auc_uuid)
+
+            # Update public notification card in place
+            try:
+                if interaction.guild:
+                    from apps.obx_tasks.bot.announcement_service import announce_auction
+                    await announce_auction(refreshed_auc, interaction.guild, self)
+            except Exception as ann_err:
+                logger.warning("Could not refresh auction card on cancel bid: %s", ann_err)
+
+            embed = discord.Embed(
+                title="💸 Bid Cancelled & Refunded!",
+                description=(
+                    f"Your locked bid of **{refund_amount:,} OBX** on **{refreshed_auc.title}** has been cancelled.\n\n"
+                    f"✅ **{refund_amount:,} OBX** has been returned to your available balance instantly."
+                ),
+                color=discord.Color.green(),
+            )
+            await interaction.edit_original_response(embed=embed, view=None)
+        except Exception as exc:
+            logger.error("Error confirming bid cancel: %s", exc)
+            await interaction.followup.send(f"❌ Could not cancel bid: {str(exc)}", ephemeral=True)
 
     async def _handle_auc_card_claim(self, interaction: discord.Interaction, auction_id: str):
         try:

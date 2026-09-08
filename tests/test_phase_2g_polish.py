@@ -186,7 +186,7 @@ def test_auction_announcement_gtd_and_fcfs_cards():
     )
     btn_labels = [b.label for b in view_gtd.children]
     assert "BID" in btn_labels
-    assert "EDIT BID" in btn_labels
+    assert "CANCEL BID" in btn_labels
     assert "MY BID" in btn_labels
 
     # Any auction renders standard ranked bidding UI
@@ -221,7 +221,7 @@ def test_auction_announcement_gtd_and_fcfs_cards():
     )
     multi_btn_labels = [b.label for b in view_multi.children]
     assert "BID" in multi_btn_labels
-    assert "EDIT BID" in multi_btn_labels
+    assert "CANCEL BID" in multi_btn_labels
     assert "MY BID" in multi_btn_labels
 
 

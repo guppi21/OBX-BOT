@@ -526,16 +526,14 @@ class AuctionService:
         # 1. bid_amount DESC
         # 2. updated_at ASC (earliest bid timestamp wins ties)
         # 3. discord_user_id ASC (deterministic tie-breaker)
-        bids = (
-            self.session.query(AuctionBid)
-            .filter_by(auction_id=auction.id)
-            .order_by(
-                desc(AuctionBid.bid_amount),
-                asc(AuctionBid.updated_at),
-                asc(AuctionBid.discord_user_id),
-            )
-            .all()
-        )
+        bids_query = self.session.query(AuctionBid).filter(AuctionBid.auction_id == auction.id)
+        if auction.status == AuctionStatus.ACTIVE:
+            bids_query = bids_query.filter(AuctionBid.is_settled.is_(False))
+        bids = bids_query.order_by(
+            desc(AuctionBid.bid_amount),
+            asc(AuctionBid.updated_at),
+            asc(AuctionBid.discord_user_id),
+        ).all()
 
         total_bidders = len(bids)
         total_slots = auction.total_slots
@@ -601,7 +599,7 @@ class AuctionService:
         if auction.auction_type == AuctionType.GTD:
             bids_stmt = (
                 select(AuctionBid)
-                .where(AuctionBid.auction_id == auction.id)
+                .where(AuctionBid.auction_id == auction.id, AuctionBid.is_settled.is_(False))
                 .order_by(
                     desc(AuctionBid.bid_amount),
                     asc(AuctionBid.updated_at),
@@ -769,6 +767,45 @@ class AuctionService:
         bid.is_winner = False
         self.session.commit()
         logger.info("Outbid user %s withdrew %d OBX from auction %s", discord_user_id, refund_amount, auction.id)
+        return refund_amount
+
+    def cancel_bid(self, auction_id: str | uuid.UUID, discord_user_id: str) -> int:
+        """Allow any bidder to cancel their active bid and release their locked OBX immediately."""
+        if not discord_user_id or not str(discord_user_id).strip():
+            raise AuctionError("Discord User ID is required.")
+
+        if isinstance(auction_id, str):
+            auction_id = uuid.UUID(auction_id)
+
+        stmt = select(Auction).where(Auction.id == auction_id).with_for_update()
+        auction = self.session.execute(stmt).scalar_one_or_none()
+        if not auction:
+            raise AuctionError(f"Auction '{auction_id}' not found.")
+
+        if auction.status != AuctionStatus.ACTIVE:
+            raise AuctionError(f"Auction is not active (current status: {auction.status.value}).")
+
+        bid = (
+            self.session.query(AuctionBid)
+            .filter_by(auction_id=auction.id, discord_user_id=str(discord_user_id))
+            .with_for_update()
+            .first()
+        )
+        if not bid or bid.is_settled:
+            raise AuctionError("You do not have an active bid on this auction.")
+
+        refund_amount = bid.bid_amount
+        idem_key = f"auction_bid_cancel:{auction.id}:{discord_user_id}:{refund_amount}"
+        self.wallet_service.release_funds(
+            discord_user_id=str(discord_user_id),
+            amount=refund_amount,
+            reference_type=ReferenceType.AUCTION_REFUND,
+            idempotency_key=idem_key,
+        )
+        bid.is_settled = True
+        bid.is_winner = False
+        self.session.commit()
+        logger.info("User %s cancelled bid of %d OBX on auction %s", discord_user_id, refund_amount, auction.id)
         return refund_amount
 
     def grant_custom_reward(
