@@ -126,3 +126,80 @@ async def test_admin_recover_from_logs_scans_and_reconstructs(db_session):
     # user 2 got 15
     assert w_user2.available_balance == 15
     assert mock_deploy.called
+
+
+@pytest.mark.asyncio
+async def test_admin_backup_and_restore_cycle(db_session):
+    import json
+    bot = create_discord_bot()
+    backup_cmd = None
+    restore_cmd = None
+    for cmd in bot.tree.get_commands():
+        if cmd.name == "admin-backup":
+            backup_cmd = cmd
+        elif cmd.name == "admin-restore-backup":
+            restore_cmd = cmd
+
+    assert backup_cmd is not None
+    assert restore_cmd is not None
+
+    ws = WalletService(db_session)
+    ws.get_or_create_user("bk_user_1")
+    ws.credit("bk_user_1", 250, "test", "init_bk1")
+    ws.get_or_create_user("bk_user_2")
+    ws.credit("bk_user_2", 150, "test", "init_bk2")
+
+    # 1. Run /admin-backup
+    inter_bk = MagicMock(spec=discord.Interaction)
+    inter_bk.guild_id = 1527720394151170048
+    inter_bk.response.defer = AsyncMock()
+    inter_bk.followup.send = AsyncMock()
+
+    with patch("apps.obx_tasks.bot.client.is_admin", return_value=True), \
+         patch("apps.obx_tasks.bot.client.session_scope", lambda: mock_session_scope_for(db_session)):
+        await backup_cmd.callback(inter_bk)
+
+    assert inter_bk.followup.send.called
+    bk_args = inter_bk.followup.send.call_args[1]
+    assert "file" in bk_args
+    assert "embed" in bk_args
+    assert "Backup Generated" in bk_args["embed"].title
+
+    # Read exported file bytes
+    exported_bytes = bk_args["file"].fp.read()
+    payload = json.loads(exported_bytes.decode("utf-8"))
+    assert payload["total_obx_in_circulation"] >= 400
+
+    # 2. Simulate wiping balances
+    _, w1, _ = ws.get_or_create_user("bk_user_1")
+    w1.available_balance = 0
+    w1.locked_balance = 0
+    _, w2, _ = ws.get_or_create_user("bk_user_2")
+    w2.available_balance = 0
+    w2.locked_balance = 0
+    db_session.commit()
+
+    # 3. Restore using /admin-restore-backup
+    inter_rest = MagicMock(spec=discord.Interaction)
+    inter_rest.guild = MagicMock(id=1527720394151170048)
+    inter_rest.response.defer = AsyncMock()
+    inter_rest.followup.send = AsyncMock()
+
+    mock_attachment = MagicMock(spec=discord.Attachment)
+    mock_attachment.filename = "obx_backup_test.json"
+    mock_attachment.read = AsyncMock(return_value=exported_bytes)
+
+    with patch("apps.obx_tasks.bot.client.is_admin", return_value=True), \
+         patch("apps.obx_tasks.bot.client.session_scope", lambda: mock_session_scope_for(db_session)), \
+         patch("apps.obx_tasks.bot.announcement_service.deploy_or_update_leaderboard", new_callable=AsyncMock):
+        await restore_cmd.callback(inter_rest, backup_file=mock_attachment)
+
+    assert inter_rest.followup.send.called
+    rest_args = inter_rest.followup.send.call_args[1]
+    assert "Restored Successfully" in rest_args["embed"].title
+
+    db_session.refresh(w1)
+    db_session.refresh(w2)
+    assert w1.available_balance == 250
+    assert w2.available_balance == 150
+

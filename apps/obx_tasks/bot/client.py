@@ -1339,6 +1339,159 @@ def create_discord_bot() -> OBXTaskBot:
             logger.error("Error in admin_bulk_restore: %s", exc)
             await interaction.followup.send(f"❌ Bulk restore error: {str(exc)}", ephemeral=True)
 
+    @bot.tree.command(name="admin-backup", description="[Admin] Export a full JSON backup of all wallets, balances, and ledger records")
+    async def admin_backup_command(interaction: discord.Interaction):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            import io
+            import json
+            from datetime import datetime, timezone
+            from packages.database.models.wallet import Wallet
+            from packages.database.models.user import User
+            from packages.database.models.auction import Auction
+            from packages.database.models.task import Task
+
+            with session_scope() as session:
+                wallets = session.query(Wallet).join(User).all()
+                wallet_data = [
+                    {
+                        "discord_user_id": str(w.user.discord_user_id),
+                        "available_balance": int(w.available_balance or 0),
+                        "locked_balance": int(w.locked_balance or 0),
+                        "total_balance": int(w.total_balance or 0),
+                        "updated_at": w.updated_at.isoformat() if w.updated_at else None,
+                    }
+                    for w in wallets
+                    if w.user
+                ]
+
+                users = session.query(User).all()
+                user_data = [
+                    {
+                        "discord_user_id": str(u.discord_user_id),
+                        "created_at": u.created_at.isoformat() if u.created_at else None,
+                    }
+                    for u in users
+                ]
+
+                tasks = session.query(Task).all()
+                task_data = [
+                    {
+                        "id": str(t.id),
+                        "title": t.title,
+                        "reward_per_user": t.reward_per_user,
+                        "status": t.status.value if t.status else None,
+                    }
+                    for t in tasks
+                ]
+
+                auctions = session.query(Auction).all()
+                auction_data = [
+                    {
+                        "id": str(a.id),
+                        "title": a.title,
+                        "total_slots": a.total_slots,
+                        "price_or_min_bid": a.price_or_min_bid,
+                        "status": a.status.value if a.status else None,
+                    }
+                    for a in auctions
+                ]
+
+            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
+            backup_payload = {
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "guild_id": str(interaction.guild_id) if interaction.guild_id else None,
+                "total_users": len(user_data),
+                "total_wallets": len(wallet_data),
+                "total_obx_in_circulation": sum(w["total_balance"] for w in wallet_data),
+                "wallets": wallet_data,
+                "users": user_data,
+                "tasks": task_data,
+                "auctions": auction_data,
+            }
+
+            json_bytes = json.dumps(backup_payload, indent=2).encode("utf-8")
+            file = discord.File(
+                fp=io.BytesIO(json_bytes),
+                filename=f"obx_backup_{now_str}.json",
+            )
+
+            embed = discord.Embed(
+                title="💾 OBX Database Backup Generated",
+                description=(
+                    f"**Backup Complete!**\n\n"
+                    f"• 👥 **Total Members:** `{len(wallet_data)}`\n"
+                    f"• 💎 **Circulating OBX:** `{backup_payload['total_obx_in_circulation']:,} OBX`\n"
+                    f"• 📅 **Timestamp:** `{now_str}`\n\n"
+                    "Attached is the full JSON snapshot. You can download and save this file, or restore from it anytime using `/admin-restore-backup`."
+                ),
+                color=discord.Color.green(),
+            )
+            await interaction.followup.send(embed=embed, file=file, ephemeral=True)
+        except Exception as exc:
+            logger.error("Error generating backup: %s", exc)
+            await interaction.followup.send(f"❌ Backup error: {str(exc)}", ephemeral=True)
+
+    @bot.tree.command(name="admin-restore-backup", description="[Admin] Restore all member OBX balances from a previously exported JSON backup file")
+    @app_commands.describe(backup_file="The .json backup file exported by /admin-backup")
+    async def admin_restore_backup_command(interaction: discord.Interaction, backup_file: discord.Attachment):
+        if not is_admin(interaction):
+            await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        try:
+            import json
+            file_bytes = await backup_file.read()
+            payload = json.loads(file_bytes.decode("utf-8"))
+
+            wallets = payload.get("wallets", [])
+            if not wallets:
+                await interaction.followup.send("❌ Invalid backup file: no wallet records found.", ephemeral=True)
+                return
+
+            with session_scope() as session:
+                from apps.obx_core.services.wallet_service import WalletService
+                ws = WalletService(session)
+                restored_count = 0
+                total_restored_obx = 0
+
+                for w in wallets:
+                    u_id = str(w["discord_user_id"])
+                    bal = int(w.get("total_balance", 0) or w.get("available_balance", 0))
+                    if bal <= 0:
+                        continue
+                    ws.get_or_create_user(u_id)
+                    ws.credit(
+                        discord_user_id=u_id,
+                        amount=bal,
+                        reference_type="admin_file_restore",
+                        idempotency_key=f"file_restore_{u_id}_{bal}_{payload.get('generated_at', '')}",
+                    )
+                    restored_count += 1
+                    total_restored_obx += bal
+
+            if interaction.guild:
+                from apps.obx_tasks.bot.announcement_service import deploy_or_update_leaderboard
+                await deploy_or_update_leaderboard(interaction.guild, bot)
+
+            embed = discord.Embed(
+                title="✅ Backup Restored Successfully",
+                description=(
+                    f"Successfully restored `{total_restored_obx:,} OBX` across `{restored_count}` members from backup file `{backup_file.filename}`!\n\n"
+                    "📢 Leaderboard has been refreshed in `#leaderboard`."
+                ),
+                color=discord.Color.green(),
+            )
+            await interaction.followup.send(embed=embed, ephemeral=True)
+        except Exception as exc:
+            logger.error("Error restoring backup file: %s", exc)
+            await interaction.followup.send(f"❌ Restore error: {str(exc)}", ephemeral=True)
+
     @bot.tree.command(name="admin-settle-auction", description="[Admin] Settle and finalize an auction to distribute rewards and unlock losing bids")
     @app_commands.describe(auction_id="The UUID of the auction to settle")
     async def admin_settle_auction_command(interaction: discord.Interaction, auction_id: str):
