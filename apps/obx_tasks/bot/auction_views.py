@@ -233,21 +233,18 @@ class AuctionNotificationCardView(View):
                 self.add_item(discord.ui.Button(
                     label="BID",
                     style=discord.ButtonStyle.success,
-                    emoji="💰",
                     custom_id=f"obx:auc_card:bid:{auction_id}",
                     row=0,
                 ))
                 self.add_item(discord.ui.Button(
                     label="CANCEL BID",
                     style=discord.ButtonStyle.danger,
-                    emoji="❌",
                     custom_id=f"obx:auc_card:cancel_bid:{auction_id}",
                     row=0,
                 ))
                 self.add_item(discord.ui.Button(
                     label="MY BID",
                     style=discord.ButtonStyle.secondary,
-                    emoji="📍",
                     custom_id=f"obx:auc_card:rankings:{auction_id}",
                     row=0,
                 ))

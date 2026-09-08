@@ -510,13 +510,11 @@ class OBXTaskBot(commands.Bot):
             view.add_item(discord.ui.Button(
                 label=f"Confirm Cancel & Refund ({bid_amount:,} OBX)",
                 style=discord.ButtonStyle.danger,
-                emoji="💸",
                 custom_id=f"obx:auc_card:confirm_cancel:{auc_uuid}",
             ))
             view.add_item(discord.ui.Button(
                 label="Keep Bid",
                 style=discord.ButtonStyle.secondary,
-                emoji="✖️",
                 custom_id=f"obx:auc_card:keep_bid:{auc_uuid}",
             ))
             await interaction.response.send_message(embed=embed, view=view, ephemeral=True)

@@ -289,7 +289,7 @@ def test_editing_x_url_updates_auction_and_refreshes_preview(db_session):
 
 
 def test_ranked_auction_retains_bid_cancel_bid_my_bid_buttons():
-    """Ranked GTD auctions have exactly [ 💰 BID ], [ ❌ CANCEL BID ], and [ 📍 MY BID ]."""
+    """Ranked GTD auctions have exactly [ BID ], [ CANCEL BID ], and [ MY BID ] with no emojis."""
     auc_id = str(uuid.uuid4())
     view = AuctionNotificationCardView(auction_id=auc_id, is_active=True, is_fcfs=False)
 
