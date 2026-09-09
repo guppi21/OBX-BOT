@@ -301,6 +301,32 @@ async def test_non_admin_blocked_from_admin_hub_interactions():
 
 
 @pytest.mark.asyncio
+async def test_refresh_hub_button_defers_and_updates():
+    from apps.obx_tasks.bot.dashboard_views import OBXAdminHubView
+
+    admin_view = OBXAdminHubView()
+    mock_admin = MagicMock(spec=discord.Interaction)
+    mock_admin.response = AsyncMock()
+    mock_admin.response.is_done.return_value = False
+    mock_admin.followup = AsyncMock()
+    mock_admin.guild = MagicMock()
+    mock_admin.client = MagicMock()
+
+    btn_refresh = [b for b in admin_view.children if getattr(b, "custom_id", None) == "obx:admin:refresh_hub"][0]
+
+    with patch("apps.obx_tasks.bot.dashboard_views.is_admin", return_value=True), \
+         patch("apps.obx_tasks.bot.announcement_service.deploy_or_update_admin_hub", new_callable=AsyncMock) as mock_deploy:
+        mock_deploy.return_value = (True, "✅ Admin Hub refreshed in-place.")
+        await btn_refresh.callback(mock_admin)
+
+    mock_admin.response.defer.assert_awaited_once_with(ephemeral=True)
+    mock_deploy.assert_awaited_once_with(mock_admin.guild, mock_admin.client)
+    mock_admin.followup.send.assert_awaited_once()
+    assert "refreshed in-place" in mock_admin.followup.send.call_args[0][0]
+
+
+
+@pytest.mark.asyncio
 async def test_announce_task_publishes_rich_card_with_social_link_unfurl_and_outbox(db_session):
     from apps.obx_tasks.services.task_service import TaskService
     from apps.obx_tasks.bot.announcement_service import announce_task

@@ -712,10 +712,15 @@ class OBXAdminHubView(View):
         if not is_admin(interaction):
             await interaction.response.send_message("❌ Permission Denied: Administrator role required.", ephemeral=True)
             return
+        if not _is_response_done(interaction):
+            await interaction.response.defer(ephemeral=True)
         from apps.obx_tasks.bot.announcement_service import deploy_or_update_admin_hub
-        await deploy_or_update_admin_hub(interaction.guild, interaction.client)
-        if hasattr(interaction, "response") and not _is_response_done(interaction):
-            await interaction.response.send_message("✅ Admin Hub refreshed in-place.", ephemeral=True)
+        ok, msg = await deploy_or_update_admin_hub(interaction.guild, interaction.client)
+        try:
+            await interaction.followup.send(msg if ok else f"⚠️ {msg}", ephemeral=True)
+        except Exception as send_err:
+            logger.debug("Could not send followup message for refresh_hub_btn: %s", send_err)
+
 
 
 class AdminResetLeaderboardConfirmView(View):
