@@ -112,7 +112,10 @@ class LeaderboardView(View):
 
     async def update_view(self, interaction: discord.Interaction):
         if not _is_response_done(interaction):
-            await interaction.response.defer(ephemeral=True)
+            try:
+                await interaction.response.defer(ephemeral=True)
+            except Exception:
+                pass
 
         offset = self.page * self.page_size
 

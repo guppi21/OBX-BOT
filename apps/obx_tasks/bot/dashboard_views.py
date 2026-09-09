@@ -1336,7 +1336,10 @@ async def handle_admin_review(interaction: discord.Interaction):
         return
 
     if not _is_response_done(interaction):
-        await interaction.response.defer(ephemeral=True)
+        try:
+            await interaction.response.defer(ephemeral=True)
+        except Exception:
+            pass
 
     try:
         with session_scope() as session:

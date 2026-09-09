@@ -557,15 +557,53 @@ async def deploy_or_update_leaderboard(guild: discord.Guild, bot: discord.Client
         view = LeaderboardView()
         pub_rec = ch_service.get_published_message(str(guild.id), feature_type="LEADERBOARD")
 
+        # 1. Scan channel history for existing leaderboard card(s) authored by the bot
+        existing_bot_msgs = []
+        try:
+            if hasattr(channel, "history"):
+                async for m in channel.history(limit=25):
+                    if m.author.id == bot.user.id and m.embeds and any("LEADERBOARD" in (e.title or "").upper() for e in m.embeds):
+                        existing_bot_msgs.append(m)
+        except Exception as scan_err:
+            logger.debug("Could not scan channel history in %s: %s", getattr(channel, "name", "unknown"), scan_err)
+
+        target_msg = None
         if pub_rec and pub_rec.channel_id == str(channel.id):
             try:
-                msg = await channel.fetch_message(int(pub_rec.message_id))
-                await msg.edit(embed=embed, view=view)
-                logger.info("Updated existing Leaderboard in %s (Msg ID: %s)", channel.name, msg.id)
+                target_msg = await channel.fetch_message(int(pub_rec.message_id))
+            except Exception:
+                target_msg = None
+
+        # Fall back to adopting the newest existing bot message in the channel
+        if not target_msg and existing_bot_msgs:
+            target_msg = existing_bot_msgs[0]
+
+        # 2. Strict Deduplication: delete any duplicate/orphaned bot leaderboard cards in the channel
+        if existing_bot_msgs:
+            for extra_msg in existing_bot_msgs:
+                if target_msg and extra_msg.id != target_msg.id:
+                    try:
+                        await extra_msg.delete()
+                        logger.info("Deleted duplicate leaderboard message %s in %s", extra_msg.id, channel.name)
+                    except Exception as del_err:
+                        logger.debug("Could not delete duplicate leaderboard message %s: %s", extra_msg.id, del_err)
+
+        # 3. If target message exists, edit it in place
+        if target_msg:
+            try:
+                await target_msg.edit(embed=embed, view=view)
+                ch_service.record_published_message(
+                    guild_id=str(guild.id),
+                    feature_type="LEADERBOARD",
+                    channel_id=str(channel.id),
+                    message_id=str(target_msg.id),
+                )
+                logger.info("Updated existing Leaderboard in %s (Msg ID: %s)", channel.name, target_msg.id)
                 return True, f"✅ Leaderboard refreshed in {channel.mention}."
             except Exception as exc:
-                logger.warning("Could not edit previous Leaderboard message (%s), posting new: %s", pub_rec.message_id, exc)
+                logger.warning("Could not edit Leaderboard message (%s), posting new: %s", target_msg.id, exc)
 
+        # 4. First deployment fallback: post new message
         try:
             msg = await channel.send(embed=embed, view=view)
             ch_service.record_published_message(
