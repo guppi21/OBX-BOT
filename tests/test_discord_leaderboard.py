@@ -24,16 +24,22 @@ def mock_session_scope_for(db_session):
     yield db_session
 
 
-def test_leaderboard_view_only_has_prev_next():
-    """LeaderboardView should only contain PREVIOUS and NEXT buttons."""
+def test_leaderboard_view_buttons():
+    """LeaderboardView should contain PREVIOUS, My Rank, and NEXT buttons."""
     view = LeaderboardView()
-    assert len(view.children) == 2
+    assert len(view.children) == 3
 
     custom_ids = [b.custom_id for b in view.children]
     assert "obx:lb:prev" in custom_ids
+    assert "obx:lb:my_rank" in custom_ids
     assert "obx:lb:next" in custom_ids
 
-    # All old tabs, filters, and refresh must be gone
+    labels = [b.label for b in view.children]
+    assert "PREVIOUS" in labels
+    assert "My Rank" in labels
+    assert "NEXT" in labels
+
+    # All old tabs, filters, and clutter must be gone
     assert "obx:lb:wealth" not in custom_ids
     assert "obx:lb:earnings" not in custom_ids
     assert "obx:lb:completions" not in custom_ids
@@ -43,6 +49,7 @@ def test_leaderboard_view_only_has_prev_next():
     assert "obx:lb:refresh" not in custom_ids
     assert "obx:lb:activity" not in custom_ids
     assert "obx:lb:home" not in custom_ids
+
 
 
 def test_leaderboard_embed_shows_user_balance_and_rank():
@@ -170,3 +177,37 @@ async def test_leaderboard_pagination_buttons(db_session):
     # On page 0 with small data: Previous disabled, Next disabled (only 1 page)
     assert view.btn_prev.disabled is True
     assert view.btn_next.disabled is True
+
+
+@pytest.mark.asyncio
+async def test_leaderboard_btn_my_rank(db_session):
+    """Clicking My Rank resets to page 0 and displays personal rank and balance."""
+    ws = WalletService(db_session)
+    ws.get_or_create_user("rank_user_1")
+    ws.credit(discord_user_id="rank_user_1", amount=500, reference_type="test", idempotency_key="rk_user_1")
+
+    view = LeaderboardView(page=2)
+
+    mock_interaction = MagicMock(spec=discord.Interaction)
+    mock_interaction.user = MagicMock(id="rank_user_1")
+    mock_interaction.response = AsyncMock()
+    mock_interaction.followup = AsyncMock()
+
+    btn = [b for b in view.children if getattr(b, "custom_id", None) == "obx:lb:my_rank"][0]
+
+    with patch("apps.obx_tasks.bot.leaderboard_views.session_scope", lambda: mock_session_scope_for(db_session)):
+        await btn.callback(mock_interaction)
+
+    assert view.page == 0
+    assert mock_interaction.edit_original_response.called or mock_interaction.followup.send.called
+    call_args = (
+        mock_interaction.edit_original_response.call_args[1]
+        if mock_interaction.edit_original_response.called
+        else mock_interaction.followup.send.call_args[1]
+    )
+    sent_embed = call_args["embed"]
+    assert "**Your Balance**" in sent_embed.description
+    assert "500 OBX" in sent_embed.description
+    assert "**Your Rank**" in sent_embed.description
+
+

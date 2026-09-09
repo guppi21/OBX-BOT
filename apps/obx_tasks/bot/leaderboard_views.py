@@ -163,10 +163,16 @@ class LeaderboardView(View):
             self.page -= 1
         await self.update_view(interaction)
 
+    @discord.ui.button(label="My Rank", style=discord.ButtonStyle.primary, custom_id="obx:lb:my_rank", row=0)
+    async def btn_my_rank(self, interaction: discord.Interaction, button: Button):
+        self.page = 0
+        await self.update_view(interaction)
+
     @discord.ui.button(label="NEXT", style=discord.ButtonStyle.secondary, custom_id="obx:lb:next", row=0)
     async def btn_next(self, interaction: discord.Interaction, button: Button):
         self.page += 1
         await self.update_view(interaction)
+
 
 
 async def handle_leaderboard(
