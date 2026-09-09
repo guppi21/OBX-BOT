@@ -819,12 +819,12 @@ async def handle_home(interaction: discord.Interaction):
 
 
 async def handle_browse_tasks(interaction: discord.Interaction):
+    if not _is_response_done(interaction):
+        await interaction.response.defer(ephemeral=True)
+
     from apps.obx_tasks.bot.permissions import check_raider_access
     if not await check_raider_access(interaction):
         return
-
-    if not _is_response_done(interaction):
-        await interaction.response.defer(ephemeral=True)
 
     try:
         with session_scope() as session:
@@ -850,12 +850,12 @@ async def handle_browse_tasks(interaction: discord.Interaction):
 
 
 async def handle_my_wallet(interaction: discord.Interaction):
+    if not _is_response_done(interaction):
+        await interaction.response.defer(ephemeral=True)
+
     from apps.obx_tasks.bot.permissions import check_raider_access
     if not await check_raider_access(interaction):
         return
-
-    if not _is_response_done(interaction):
-        await interaction.response.defer(ephemeral=True)
 
     try:
         with session_scope() as session:
@@ -898,11 +898,12 @@ async def handle_my_wallet(interaction: discord.Interaction):
 
 
 async def handle_my_submissions(interaction: discord.Interaction):
+    if not _is_response_done(interaction):
+        await interaction.response.defer(ephemeral=True)
+
     from apps.obx_tasks.bot.permissions import check_raider_access
     if not await check_raider_access(interaction):
         return
-    if not _is_response_done(interaction):
-        await interaction.response.defer(ephemeral=True)
 
     try:
         with session_scope() as session:

@@ -42,6 +42,8 @@ coverage.xml
 *.sqlite3
 obx_backup_*.json
 backup_*.json
+backups/*.json
+!backups/.gitkeep
 
 # Operating System & IDEs
 .DS_Store

@@ -1,6 +1,15 @@
+import time
 import discord
 from packages.shared.config import get_settings
 from packages.database.session import session_scope
+
+# In-memory short TTL cache (user_id -> expiry_timestamp) to avoid repeated DB queries during load
+_raider_access_cache: dict[str, float] = {}
+
+
+def invalidate_raider_cache(user_id: str) -> None:
+    """Clear cached twitter verification for a user."""
+    _raider_access_cache.pop(str(user_id), None)
 
 
 def is_admin(interaction: discord.Interaction) -> bool:
@@ -65,15 +74,27 @@ async def check_raider_access(interaction: discord.Interaction) -> bool:
     if is_admin(interaction):
         return True
 
-    from apps.obx_tasks.services.raider_service import RaiderService
-    from apps.obx_tasks.bot.join_raid_views import handle_join_raid_click
+    # Fast path 1: check role in memory (no DB checkout)
+    if not has_raider_role(interaction):
+        has_role = False
+        has_twitter = False
+    else:
+        has_role = True
+        # Fast path 2: check short TTL in-memory cache for twitter verification
+        user_id = str(interaction.user.id)
+        now = time.time()
+        cached_exp = _raider_access_cache.get(user_id)
+        if cached_exp and cached_exp > now:
+            has_twitter = True
+        else:
+            from apps.obx_tasks.services.raider_service import RaiderService
+            with session_scope() as session:
+                r_service = RaiderService(session)
+                profile = r_service.get_raider_profile(user_id)
+                has_twitter = bool(profile and profile.twitter_handle)
 
-    with session_scope() as session:
-        r_service = RaiderService(session)
-        profile = r_service.get_raider_profile(str(interaction.user.id))
-        has_twitter = (profile is not None and bool(profile.twitter_handle))
-
-    has_role = has_raider_role(interaction)
+            if has_twitter:
+                _raider_access_cache[user_id] = now + 60.0  # cache 60s
 
     if has_role and has_twitter:
         return True

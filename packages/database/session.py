@@ -18,13 +18,21 @@ def create_db_engine(database_url: str | None = None) -> Engine:
     if url.startswith("sqlite"):
         connect_args = {"check_same_thread": False, "timeout": 30}
         
-    engine = create_engine(
-        url,
-        echo=False,
-        future=True,
-        pool_pre_ping=True,
-        connect_args=connect_args,
-    )
+    engine_kwargs = {
+        "echo": False,
+        "future": True,
+        "connect_args": connect_args,
+    }
+    if not url.startswith("sqlite"):
+        engine_kwargs["pool_size"] = 25
+        engine_kwargs["max_overflow"] = 25
+        engine_kwargs["pool_recycle"] = 1800
+        engine_kwargs["pool_pre_ping"] = True
+        engine_kwargs["pool_timeout"] = 10
+    else:
+        engine_kwargs["pool_pre_ping"] = True
+
+    engine = create_engine(url, **engine_kwargs)
 
     if url.startswith("sqlite"):
         @event.listens_for(engine, "connect")

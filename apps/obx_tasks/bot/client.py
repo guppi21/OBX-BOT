@@ -46,8 +46,9 @@ class OBXTaskBot(commands.Bot):
         self.add_view(AuctionWinnerResultView())
         self.add_view(AdminLogDismissView())
 
-        # Start background maintenance loop for auctions & tasks
+        # Start background maintenance loops for auctions, tasks, and daily backups
         self.loop.create_task(self._auction_maintenance_loop())
+        self.loop.create_task(self._daily_backup_loop())
 
         settings = get_settings()
         if settings.DISCORD_GUILD_ID:
@@ -625,6 +626,44 @@ class OBXTaskBot(commands.Bot):
                 logger.debug("Leaderboard maintenance loop error: %s", lb_loop_err)
 
             await asyncio.sleep(60)
+
+    async def _daily_backup_loop(self):
+        """Asynchronous background loop that takes a full snapshot daily and rotates old files."""
+        await self.wait_until_ready()
+        _last_backup_date: Optional[str] = None
+        while not self.is_closed():
+            try:
+                from datetime import datetime, timezone
+                now_utc = datetime.now(timezone.utc)
+                today_str = now_utc.strftime("%Y-%m-%d")
+                if _last_backup_date != today_str:
+                    from apps.obx_tasks.services.backup_service import BackupService
+                    with session_scope() as session:
+                        payload = BackupService.create_database_snapshot(session)
+
+                    filepath, pruned = BackupService.save_snapshot_to_disk(
+                        payload=payload,
+                        backup_dir="backups",
+                        retention_hours=48,
+                    )
+                    logger.info("Automated daily snapshot created: %s (pruned %d old files)", filepath, pruned)
+
+                    for guild in self.guilds:
+                        try:
+                            await BackupService.post_snapshot_to_admin_channel(
+                                guild=guild,
+                                filepath=filepath,
+                                payload=payload,
+                                bot=self,
+                            )
+                        except Exception as post_err:
+                            logger.warning("Could not upload snapshot to guild %s: %s", guild.id, post_err)
+
+                    _last_backup_date = today_str
+            except Exception as exc:
+                logger.error("Error in daily backup loop: %s", exc)
+
+            await asyncio.sleep(1800)
 
     async def on_ready(self):
         settings = get_settings()
@@ -1476,83 +1515,35 @@ def create_discord_bot() -> OBXTaskBot:
         try:
             import io
             import json
-            from datetime import datetime, timezone
-            from packages.database.models.wallet import Wallet
-            from packages.database.models.user import User
-            from packages.database.models.auction import Auction
-            from packages.database.models.task import Task
+            import os
+            from apps.obx_tasks.services.backup_service import BackupService
 
             with session_scope() as session:
-                wallets = session.query(Wallet).join(User).all()
-                wallet_data = [
-                    {
-                        "discord_user_id": str(w.user.discord_user_id),
-                        "available_balance": int(w.available_balance or 0),
-                        "locked_balance": int(w.locked_balance or 0),
-                        "total_balance": int(w.total_balance or 0),
-                        "updated_at": w.updated_at.isoformat() if w.updated_at else None,
-                    }
-                    for w in wallets
-                    if w.user
-                ]
+                backup_payload = BackupService.create_database_snapshot(session)
 
-                users = session.query(User).all()
-                user_data = [
-                    {
-                        "discord_user_id": str(u.discord_user_id),
-                        "created_at": u.created_at.isoformat() if u.created_at else None,
-                    }
-                    for u in users
-                ]
+            saved_path, pruned = BackupService.save_snapshot_to_disk(
+                payload=backup_payload,
+                backup_dir="backups",
+                retention_hours=48,
+            )
 
-                tasks = session.query(Task).all()
-                task_data = [
-                    {
-                        "id": str(t.id),
-                        "title": t.title,
-                        "reward_per_user": t.reward_per_user,
-                        "status": t.status.value if t.status else None,
-                    }
-                    for t in tasks
-                ]
-
-                auctions = session.query(Auction).all()
-                auction_data = [
-                    {
-                        "id": str(a.id),
-                        "title": a.title,
-                        "total_slots": a.total_slots,
-                        "price_or_min_bid": a.price_or_min_bid,
-                        "status": a.status.value if a.status else None,
-                    }
-                    for a in auctions
-                ]
-
-            now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d_%H%M%S")
-            backup_payload = {
-                "generated_at": datetime.now(timezone.utc).isoformat(),
-                "guild_id": str(interaction.guild_id) if interaction.guild_id else None,
-                "total_users": len(user_data),
-                "total_wallets": len(wallet_data),
-                "total_obx_in_circulation": sum(w["total_balance"] for w in wallet_data),
-                "wallets": wallet_data,
-                "users": user_data,
-                "tasks": task_data,
-                "auctions": auction_data,
-            }
-
+            filename = os.path.basename(saved_path)
             json_bytes = json.dumps(backup_payload, indent=2).encode("utf-8")
             file = discord.File(
                 fp=io.BytesIO(json_bytes),
-                filename=f"obx_backup_{now_str}.json",
+                filename=filename,
             )
 
+            now_str = backup_payload["generated_at"]
             embed = discord.Embed(
                 title="💾 OBX Database Backup Generated",
                 description=(
                     f"**Backup Complete!**\n\n"
-                    f"• 👥 **Total Members:** `{len(wallet_data)}`\n"
+                    f"• 👥 **Total Members:** `{backup_payload['total_users']}`\n"
                     f"• 💎 **Circulating OBX:** `{backup_payload['total_obx_in_circulation']:,} OBX`\n"
+                    f"• 📋 **Tasks / Proofs:** `{backup_payload['total_tasks']}` tasks • `{backup_payload['total_submissions']}` proofs\n"
+                    f"• 🎯 **Auctions / Bids:** `{backup_payload['total_auctions']}` auctions • `{backup_payload['total_bids']}` bids\n"
+                    f"• 🗄️ **Disk Snapshot:** `{filename}` (Pruned {pruned} old files)\n"
                     f"• 📅 **Timestamp:** `{now_str}`\n\n"
                     "Attached is the full JSON snapshot. You can download and save this file, or restore from it anytime using `/admin-restore-backup`."
                 ),
@@ -2377,12 +2368,16 @@ def create_discord_bot() -> OBXTaskBot:
                             ),
                             color=COLOR_GREEN,
                         )
+                        from apps.obx_tasks.bot.permissions import invalidate_raider_cache
+                        invalidate_raider_cache(str(member.id))
                         await interaction.followup.send(embed=embed, ephemeral=True)
                     except ValueError as err:
                         await interaction.followup.send(f"❌ {str(err)}", ephemeral=True)
 
                 elif action.value == "remove":
                     removed = r_service.remove_raider_twitter(str(member.id))
+                    from apps.obx_tasks.bot.permissions import invalidate_raider_cache
+                    invalidate_raider_cache(str(member.id))
                     if removed:
                         await interaction.followup.send(f"✅ Removed connected X account for {member.mention}.", ephemeral=True)
                     else:

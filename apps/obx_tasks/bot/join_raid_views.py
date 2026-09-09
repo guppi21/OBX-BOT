@@ -93,6 +93,8 @@ class SetTwitterModal(Modal, title="🐦 SET X ACCOUNT"):
                 r_service = RaiderService(session)
                 profile = r_service.set_raider_twitter(str(interaction.user.id), raw_val, avatar_url=avatar_url)
                 handle = profile.twitter_handle
+            from apps.obx_tasks.bot.permissions import invalidate_raider_cache
+            invalidate_raider_cache(str(interaction.user.id))
         except ValueError as val_err:
             await interaction.followup.send(f"❌ {str(val_err)}", ephemeral=True)
             return
