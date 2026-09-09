@@ -628,38 +628,64 @@ class OBXTaskBot(commands.Bot):
             await asyncio.sleep(60)
 
     async def _daily_backup_loop(self):
-        """Asynchronous background loop that takes a full snapshot daily and rotates old files."""
+        """Asynchronous background loop that takes a full snapshot daily (strictly once every 24 hours)
+        and rotates old files. Persists last backup timestamp in the database so bot restarts
+        and Railway redeployments never trigger redundant snapshots.
+        """
         await self.wait_until_ready()
-        _last_backup_date: Optional[str] = None
+        logger.info("Daily backup background loop initialized.")
+
         while not self.is_closed():
             try:
-                from datetime import datetime, timezone
-                now_utc = datetime.now(timezone.utc)
-                today_str = now_utc.strftime("%Y-%m-%d")
-                if _last_backup_date != today_str:
-                    from apps.obx_tasks.services.backup_service import BackupService
-                    with session_scope() as session:
-                        payload = BackupService.create_database_snapshot(session)
-
-                    filepath, pruned = BackupService.save_snapshot_to_disk(
-                        payload=payload,
+                from apps.obx_tasks.services.backup_service import BackupService
+                with session_scope() as session:
+                    is_due, last_dt, remaining = BackupService.is_daily_backup_due(
+                        session=session,
+                        min_interval_hours=24,
                         backup_dir="backups",
-                        retention_hours=48,
                     )
-                    logger.info("Automated daily snapshot created: %s (pruned %d old files)", filepath, pruned)
 
-                    for guild in self.guilds:
-                        try:
-                            await BackupService.post_snapshot_to_admin_channel(
-                                guild=guild,
-                                filepath=filepath,
-                                payload=payload,
-                                bot=self,
-                            )
-                        except Exception as post_err:
-                            logger.warning("Could not upload snapshot to guild %s: %s", guild.id, post_err)
+                if not is_due:
+                    last_str = last_dt.isoformat() if last_dt else "unknown"
+                    hours_rem = remaining / 3600.0
+                    logger.info(
+                        "Daily backup skipped: last snapshot was at %s (%.1fh / %ds remaining until next 24h cycle).",
+                        last_str, hours_rem, remaining,
+                    )
+                    sleep_duration = min(remaining, 1800)
+                    if sleep_duration < 60:
+                        sleep_duration = 60
+                    await asyncio.sleep(sleep_duration)
+                    continue
 
-                    _last_backup_date = today_str
+                logger.info("24-hour backup window reached (last backup: %s). Creating automated snapshot...", last_dt)
+                with session_scope() as session:
+                    payload = BackupService.create_database_snapshot(session)
+                    BackupService.record_backup_event(
+                        session=session,
+                        guild_id="GLOBAL",
+                        channel_id="SYSTEM",
+                        message_id="AUTO_DAILY",
+                    )
+
+                filepath, pruned = BackupService.save_snapshot_to_disk(
+                    payload=payload,
+                    backup_dir="backups",
+                    retention_hours=48,
+                )
+                logger.info("Automated daily snapshot created: %s (pruned %d old files)", filepath, pruned)
+
+                for guild in self.guilds:
+                    try:
+                        await BackupService.post_snapshot_to_admin_channel(
+                            guild=guild,
+                            filepath=filepath,
+                            payload=payload,
+                            bot=self,
+                        )
+                    except Exception as post_err:
+                        logger.warning("Could not upload snapshot to guild %s: %s", guild.id, post_err)
+
             except Exception as exc:
                 logger.error("Error in daily backup loop: %s", exc)
 
@@ -1520,6 +1546,15 @@ def create_discord_bot() -> OBXTaskBot:
 
             with session_scope() as session:
                 backup_payload = BackupService.create_database_snapshot(session)
+                try:
+                    BackupService.record_backup_event(
+                        session=session,
+                        guild_id=str(interaction.guild_id or "GLOBAL"),
+                        channel_id=str(interaction.channel_id or "MANUAL"),
+                        message_id="MANUAL_COMMAND",
+                    )
+                except Exception as rec_err:
+                    logger.warning("Could not record manual backup in DB: %s", rec_err)
 
             saved_path, pruned = BackupService.save_snapshot_to_disk(
                 payload=backup_payload,

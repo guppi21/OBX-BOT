@@ -338,9 +338,128 @@ class BackupService:
                 timestamp=datetime.now(timezone.utc),
             )
             embed.set_footer(text="OBX Autonomous Backup Engine")
-            await target_channel.send(embed=embed, file=file)
+            sent_msg = await target_channel.send(embed=embed, file=file)
             logger.info("Successfully posted daily snapshot %s to %s", filename, target_channel.name)
+            try:
+                with session_scope() as rec_session:
+                    cls.record_backup_event(
+                        session=rec_session,
+                        guild_id=str(guild.id),
+                        channel_id=str(target_channel.id),
+                        message_id=str(sent_msg.id),
+                    )
+            except Exception as rec_err:
+                logger.warning("Could not record backup event in DB for guild %s: %s", guild.id, rec_err)
             return True
         except Exception as exc:
             logger.error("Error posting snapshot to admin channel in guild %s: %s", guild.id, exc)
             return False
+
+    @classmethod
+    def record_backup_event(
+        cls,
+        session: Session,
+        guild_id: str = "GLOBAL",
+        channel_id: str = "SYSTEM",
+        message_id: str = "SNAPSHOT",
+        feature_type: str = "DAILY_BACKUP",
+    ) -> None:
+        """Persist a backup execution record in PublishedMessage to preserve
+        the last backup timestamp across bot restarts and Railway deployments.
+        """
+        from apps.obx_tasks.services.channel_service import ChannelService
+        ch_service = ChannelService(session)
+        ch_service.record_published_message(
+            guild_id=str(guild_id),
+            feature_type=feature_type,
+            channel_id=str(channel_id),
+            message_id=str(message_id),
+            source_id="SNAPSHOT",
+        )
+        logger.info("Recorded %s event in database (guild=%s, channel=%s)", feature_type, guild_id, channel_id)
+
+    @classmethod
+    def get_last_backup_from_db(cls, session: Session) -> Optional[datetime]:
+        """Fetch the most recent backup timestamp from persistent database records."""
+        from packages.database.models.channel_config import PublishedMessage
+        try:
+            records = (
+                session.query(PublishedMessage)
+                .filter(PublishedMessage.feature_type == "DAILY_BACKUP")
+                .all()
+            )
+            if not records:
+                return None
+            timestamps = []
+            for r in records:
+                t = r.updated_at or r.created_at
+                if t is not None:
+                    if t.tzinfo is None:
+                        t = t.replace(tzinfo=timezone.utc)
+                    timestamps.append(t)
+            return max(timestamps) if timestamps else None
+        except Exception as exc:
+            logger.warning("Error fetching last backup timestamp from database: %s", exc)
+            return None
+
+    @classmethod
+    def get_last_backup_from_disk(cls, backup_dir: str | Path = "backups") -> Optional[datetime]:
+        """Fetch the most recent backup timestamp from disk snapshots in backup_dir."""
+        dir_path = Path(backup_dir)
+        if not dir_path.exists():
+            return None
+        files = [f for f in dir_path.glob("obx_snapshot_*.json") if f.is_file()]
+        if not files:
+            return None
+
+        latest_dt: Optional[datetime] = None
+        for f in files:
+            try:
+                parts = f.stem.replace("obx_snapshot_", "")
+                dt = datetime.strptime(parts, "%Y-%m-%d_%H%M%S").replace(tzinfo=timezone.utc)
+            except Exception:
+                dt = datetime.fromtimestamp(f.stat().st_mtime, tz=timezone.utc)
+            if latest_dt is None or dt > latest_dt:
+                latest_dt = dt
+
+        return latest_dt
+
+    @classmethod
+    def get_last_backup_time(
+        cls,
+        session: Optional[Session] = None,
+        backup_dir: str | Path = "backups",
+    ) -> Optional[datetime]:
+        """Retrieve the most recent backup timestamp across both database and disk."""
+        db_dt = cls.get_last_backup_from_db(session) if session else None
+        disk_dt = cls.get_last_backup_from_disk(backup_dir)
+
+        if db_dt and disk_dt:
+            return max(db_dt, disk_dt)
+        return db_dt or disk_dt
+
+    @classmethod
+    def is_daily_backup_due(
+        cls,
+        session: Optional[Session] = None,
+        min_interval_hours: int = 24,
+        backup_dir: str | Path = "backups",
+    ) -> Tuple[bool, Optional[datetime], int]:
+        """Determines if a daily backup is due based on a 24-hour interval.
+        Returns:
+            (is_due: bool, last_backup_datetime: Optional[datetime], seconds_remaining: int)
+        """
+        last_dt = cls.get_last_backup_time(session=session, backup_dir=backup_dir)
+        if last_dt is None:
+            return True, None, 0
+
+        now = datetime.now(timezone.utc)
+        elapsed_seconds = (now - last_dt).total_seconds()
+        required_seconds = min_interval_hours * 3600
+
+        if elapsed_seconds >= required_seconds:
+            return True, last_dt, 0
+
+        seconds_remaining = int(required_seconds - elapsed_seconds)
+        return False, last_dt, seconds_remaining
+

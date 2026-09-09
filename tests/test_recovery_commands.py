@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, AsyncMock, patch
 
 from apps.obx_core.services.wallet_service import WalletService
 from apps.obx_tasks.bot.client import create_discord_bot
+from apps.obx_tasks.services.backup_service import BackupService
 
 
 def mock_session_scope_for(session):
@@ -129,7 +130,7 @@ async def test_admin_recover_from_logs_scans_and_reconstructs(db_session):
 
 
 @pytest.mark.asyncio
-async def test_admin_backup_and_restore_cycle(db_session):
+async def test_admin_backup_and_restore_cycle(db_session, tmp_path):
     import json
     bot = create_discord_bot()
     backup_cmd = None
@@ -155,8 +156,10 @@ async def test_admin_backup_and_restore_cycle(db_session):
     inter_bk.response.defer = AsyncMock()
     inter_bk.followup.send = AsyncMock()
 
+    orig_save = BackupService.save_snapshot_to_disk
     with patch("apps.obx_tasks.bot.client.is_admin", return_value=True), \
-         patch("apps.obx_tasks.bot.client.session_scope", lambda: mock_session_scope_for(db_session)):
+         patch("apps.obx_tasks.bot.client.session_scope", lambda: mock_session_scope_for(db_session)), \
+         patch("apps.obx_tasks.services.backup_service.BackupService.save_snapshot_to_disk", side_effect=lambda payload, **kw: orig_save(payload, backup_dir=tmp_path / "backups", retention_hours=48)):
         await backup_cmd.callback(inter_bk)
 
     assert inter_bk.followup.send.called

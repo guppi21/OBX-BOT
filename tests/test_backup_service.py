@@ -267,3 +267,122 @@ async def test_raider_access_cache_prevents_redundant_queries():
         allowed_3 = await check_raider_access(mock_interaction)
         assert allowed_3 is True
         assert mock_get_prof_2.call_count == 1
+
+
+def test_persistent_backup_tracking_in_db(db_session):
+    """Test recording and retrieving backup events in the database."""
+    # Initially no backup in DB
+    last_dt = BackupService.get_last_backup_from_db(db_session)
+    assert last_dt is None
+
+    # Record a backup event
+    BackupService.record_backup_event(
+        session=db_session,
+        guild_id="test_guild_1",
+        channel_id="test_ch_1",
+        message_id="msg_101",
+    )
+
+    last_dt = BackupService.get_last_backup_from_db(db_session)
+    assert last_dt is not None
+    assert isinstance(last_dt, datetime)
+    assert last_dt.tzinfo is not None
+
+    # Check elapsed time is ~0
+    now = datetime.now(timezone.utc)
+    diff = (now - last_dt).total_seconds()
+    assert diff >= 0
+    assert diff < 10
+
+
+def test_is_daily_backup_due_cycle(db_session, tmp_path):
+    """Test 24-hour backup due logic."""
+    empty_backup_dir = tmp_path / "empty_backups"
+    empty_backup_dir.mkdir()
+
+    # 1. When no backups exist, it is immediately due
+    is_due, last_dt, remaining = BackupService.is_daily_backup_due(
+        session=db_session,
+        min_interval_hours=24,
+        backup_dir=empty_backup_dir,
+    )
+    assert is_due is True
+    assert last_dt is None
+    assert remaining == 0
+
+    # 2. Record a backup now
+    BackupService.record_backup_event(
+        session=db_session,
+        guild_id="GLOBAL",
+        channel_id="SYSTEM",
+        message_id="AUTO_1",
+    )
+
+    # Now it should NOT be due
+    is_due, last_dt, remaining = BackupService.is_daily_backup_due(
+        session=db_session,
+        min_interval_hours=24,
+        backup_dir=empty_backup_dir,
+    )
+    assert is_due is False
+    assert last_dt is not None
+    assert 86300 <= remaining <= 86400
+
+    # 3. Simulate older backup in DB (25 hours ago)
+    from packages.database.models.channel_config import PublishedMessage
+    pub = db_session.query(PublishedMessage).filter_by(feature_type="DAILY_BACKUP").first()
+    past_25h = datetime.now(timezone.utc) - timedelta(hours=25)
+    pub.updated_at = past_25h
+    pub.created_at = past_25h
+    db_session.commit()
+
+    is_due, last_dt, remaining = BackupService.is_daily_backup_due(
+        session=db_session,
+        min_interval_hours=24,
+        backup_dir=empty_backup_dir,
+    )
+    assert is_due is True
+    assert remaining == 0
+
+
+def test_disk_backup_timestamp_detection(tmp_path):
+    """Test detecting backup timestamp from snapshot filenames and mtimes on disk."""
+    backup_dir = tmp_path / "disk_backups"
+    backup_dir.mkdir()
+
+    # Empty dir
+    assert BackupService.get_last_backup_from_disk(backup_dir) is None
+
+    # Snapshot from 2 hours ago
+    f = backup_dir / "obx_snapshot_2026-09-08_120000.json"
+    with open(f, "w") as fp:
+        fp.write("{}")
+
+    dt = BackupService.get_last_backup_from_disk(backup_dir)
+    assert dt is not None
+    assert dt.year == 2026
+    assert dt.month == 9
+    assert dt.day == 8
+    assert dt.hour == 12
+
+
+@pytest.mark.asyncio
+async def test_daily_backup_loop_skips_when_not_due(db_session):
+    """Verify that _daily_backup_loop does NOT generate or post backups when not due."""
+    from apps.obx_tasks.bot.client import create_discord_bot
+    bot = create_discord_bot()
+    bot.wait_until_ready = AsyncMock()
+    closed_states = [False, True]
+    bot.is_closed = MagicMock(side_effect=lambda: closed_states.pop(0) if closed_states else True)
+
+    with patch("apps.obx_tasks.bot.client.session_scope", lambda: _make_mock_session_scope(db_session)()), \
+         patch("apps.obx_tasks.services.backup_service.BackupService.is_daily_backup_due", return_value=(False, datetime.now(timezone.utc), 50000)) as mock_due, \
+         patch("apps.obx_tasks.services.backup_service.BackupService.create_database_snapshot") as mock_snap, \
+         patch("asyncio.sleep", AsyncMock()) as mock_sleep:
+        await bot._daily_backup_loop()
+
+    assert mock_due.called
+    assert not mock_snap.called
+    assert mock_sleep.called
+
+
